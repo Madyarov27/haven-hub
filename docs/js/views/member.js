@@ -1,6 +1,7 @@
-/* Views every organizer sees: My tasks, Calendar, Team, Rules, Profile. */
-import { $, esc, icon, avatar, kpi, empty, dueInfo, parseLocal, fmtDay, fmtDue, DAY, first, copy, toast, busy, field, safeUrl, pill } from '../ui.js';
+/* Views every organizer sees: My tasks, Calendar (month grid), Team, Rules, Profile (+ password sign-in on own-server hubs). */
+import { $, esc, icon, avatar, kpi, empty, dueInfo, parseLocal, fmtDay, DAY, first, copy, toast, busy, field, plural, confirmBox } from '../ui.js';
 import { taskCard, wireTasks } from '../task-card.js';
+import { taskDrawer } from './admin-tasks.js';
 
 const byDue = (a, b) => a.due < b.due ? -1 : a.due > b.due ? 1 : 0;
 let lastChanged = '';
@@ -32,21 +33,92 @@ export function myTasks(ctx) {
   wireTasks(ctx.el, ctx, t => { lastChanged = t.id; ctx.patchTask(t); ctx.render(); });
 }
 
+// ------------------------------------------------------------------ Calendar: a month grid (weeks start on Monday); pick a day to see and act on it
+const WD = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const cal = { month: '', day: '', who: 'me' };
+const isDay = s => /^\d{4}-\d\d-\d\d$/.test(String(s || ''));
+const ymdAdd = (ymd, n) => { const d = new Date(ymd + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+const monthAdd = (ym, n) => { const d = new Date(ym + '-15T12:00:00Z'); d.setUTCMonth(d.getUTCMonth() + n); return d.toISOString().slice(0, 7); };
+
 export function calendar(ctx) {
-  const D = ctx.D, today = (D.now || '').slice(0, 10);
-  const meets = (D.meetings || []).slice().sort((a, b) => (a.date + a.time) < (b.date + b.time) ? -1 : 1);
-  const up = meets.filter(m => !/^\d{4}-\d\d-\d\d$/.test(m.date) || m.date >= today), past = meets.filter(m => !up.includes(m));
-  const mrow = (m, i) => `<tr class="${i === 0 && up.includes(m) ? 'sel' : ''}"><td class="nowrap"><b>${esc(fmtDay(m.date))}</b></td><td>${esc(m.time || '')}</td><td>${esc(m.where || '')}</td><td>${esc(m.what || '')}${i === 0 && up.includes(m) ? ' <span class="pill ip">next</span>' : ''}</td></tr>`;
-  let h = `<p class="lede">All times are ${esc(ctx.tz)} time. Can't come to a meeting? Post your 3 lines (finished · next · blocked) in the group before it starts.</p>`;
-  h += `<div class="card flush"><div class="card-h"><h3>Meetings</h3></div>` + (meets.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Date</th><th>Time</th><th>Where</th><th>What</th></tr></thead><tbody>${up.map(mrow).join('')}${past.map(m => mrow(m, 1).replace('<tr class="">', '<tr class="dim">')).join('')}</tbody></table></div>` : `<div style="padding:0 20px">${empty({ title: 'No meetings yet', text: ctx.isAdmin ? 'Add them in <a href="#/admin/content">Meetings & rules</a>.' : 'Your lead will add them here.' })}</div>`) + `</div>`;
-  const ms = (D.milestones || []).slice().sort((a, b) => a.date < b.date ? -1 : 1);
-  if (ms.length) h += `<div class="card"><div class="card-h"><h3>Milestones</h3></div><ul class="mile-list">${ms.map(m => `<li><span class="mk ${m.done ? 'done' : ''}">${icon(m.done ? 'check' : 'flag')}</span><div><b>${esc(m.label)}</b><div class="small muted">${esc(fmtDay(m.date, { year: 'numeric' }))}${m.kind === 'gate' ? ' · must-have gate' : ''}</div></div></li>`).join('')}</ul></div>`;
-  if (!ctx.isViewer && D.tasks.length) {
-    const mine = D.tasks.filter(t => !['Done', 'Dropped'].includes(t.status)).sort(byDue);
-    h += `<div class="card flush"><div class="card-h"><h3>My deadlines</h3></div><div class="tbl-wrap"><table class="tbl stack"><thead><tr><th>Due</th><th>Task</th><th>Status</th></tr></thead><tbody>` +
-      (mine.map(t => { const di = dueInfo(t, ctx.tz); return `<tr><td class="nowrap" data-l="Due"><span class="due ${di.cls}">${esc(fmtDue(t.due))}</span></td><td data-l="Task">${esc(t.title)}</td><td>${pill(t.status)}</td></tr>`; }).join('') || `<tr><td colspan="3" class="muted">Nothing open.</td></tr>`) + `</tbody></table></div></div>`;
-  }
-  ctx.el.innerHTML = h;
+  const D = ctx.D, tz = ctx.tz, ev = D.event || {}, today = isDay((D.now || '').slice(0, 10)) ? D.now.slice(0, 10) : new Date().toISOString().slice(0, 10);
+  const qm = new URLSearchParams(location.hash.split('?')[1] || '').get('m');
+  cal.month = /^\d{4}-\d\d$/.test(qm || '') ? qm : cal.month || today.slice(0, 7);
+  const who = !D.all ? 'me' : ctx.isViewer && cal.who === 'me' ? 'all' : cal.who;
+  const src = who === 'me' ? (D.tasks || []) : (D.all || []).filter(t => who === 'all' || t.owner === who);
+  const taskCls = t => t.status === 'Done' ? 'done' : t.status === 'Blocked' ? 'blk' : dueInfo(t, tz).over ? 'over' : 'open';
+  const items = {}, put = (d, x) => { (items[d] = items[d] || []).push(x); };
+  src.forEach(t => { if (t.status !== 'Dropped' && isDay(String(t.due || '').slice(0, 10))) put(t.due.slice(0, 10), { kind: 'task', t, time: t.due.slice(11, 16), label: (who === 'me' ? '' : first(ctx.nameOf(t.owner)) + ': ') + t.title, cls: taskCls(t) }); });
+  (D.meetings || []).forEach(m => { if (isDay(m.date)) put(m.date, { kind: 'meet', m, time: m.time || '', label: m.what || 'Meeting', cls: '' }); });
+  (D.milestones || []).forEach(m => { if (isDay(m.date)) put(m.date, { kind: 'mile', m, time: '', label: m.label, cls: (m.kind === 'gate' ? 'gate' : m.kind === 'event' ? 'ev' : '') + (m.done ? ' done' : '') }); });
+  const ORDER = { mile: 0, meet: 1, task: 2 };
+  Object.keys(items).forEach(d => items[d].sort((a, b) => ORDER[a.kind] - ORDER[b.kind] || (a.time < b.time ? -1 : a.time > b.time ? 1 : 0)));
+  const isEvent = d => isDay(ev.start) && d >= ev.start && d <= (isDay(ev.end) ? ev.end : ev.start);
+  const m0 = cal.month + '-01', lead = (new Date(m0 + 'T12:00:00Z').getUTCDay() + 6) % 7;
+  const dim = new Date(Date.UTC(+cal.month.slice(0, 4), +cal.month.slice(5, 7), 0)).getUTCDate();
+  const days = Array.from({ length: Math.ceil((lead + dim) / 7) * 7 }, (_, i) => ymdAdd(m0, i - lead));
+  if (!cal.day || cal.day.slice(0, 7) !== cal.month) cal.day = today.slice(0, 7) === cal.month ? today : days.find(d => d.slice(0, 7) === cal.month && items[d]) || m0;
+  const title = new Date(m0 + 'T12:00:00Z').toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+
+  const chip = x => `<span class="cc k-${x.kind} ${x.cls}">${x.kind === 'meet' && x.time ? `<i>${esc(x.time)}</i> ` : ''}${esc(x.label)}</span>`;
+  const cell = d => {
+    const l = items[d] || [], cls = ['cal-d', d.slice(0, 7) !== cal.month && 'out', d < today && 'past', d === today && 'today', isEvent(d) && 'event', d === cal.day && 'sel'].filter(Boolean).join(' ');
+    const label = fmtDay(d, { weekday: 'long', day: 'numeric', month: 'long' }) + (d === today ? ', today' : '') + (l.length ? ', ' + plural(l.length, 'item') : '');
+    return `<button type="button" class="${cls}" data-day="${d}" tabindex="${d === cal.day ? 0 : -1}" aria-label="${esc(label)}" aria-pressed="${d === cal.day}">
+      <span class="cal-n">${Number(d.slice(8))}</span><span class="cal-chips">${l.slice(0, 3).map(chip).join('')}${l.length > 3 ? `<span class="cc more">+${l.length - 3} more</span>` : ''}</span>
+      <span class="cal-dots">${l.slice(0, 4).map(x => `<i class="dt k-${x.kind} ${x.cls}"></i>`).join('')}</span></button>`;
+  };
+  const whoCtl = D.all ? `<div class="seg" role="group" aria-label="Whose tasks">${ctx.isViewer ? '' : `<button type="button" data-who="me" class="${who === 'me' ? 'on' : ''}">Mine</button>`}<button type="button" data-who="all" class="${who === 'all' ? 'on' : ''}">Everyone</button></div>
+    <select id="cal-p" aria-label="Show one person">${[['', 'One person…']].concat(D.team.map(p => [p.key, p.name])).map(([k, n]) => `<option value="${esc(k)}" ${who === k ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select>` : '';
+
+  const dayPanel = () => {
+    const d = cal.day, l = items[d] || [], tasks = l.filter(x => x.kind === 'task').map(x => x.t);
+    let h = `<div class="card cal-day"><div class="card-h"><h3>${esc(fmtDay(d, { weekday: 'long', day: 'numeric', month: 'long' }))}</h3>${d === today ? '<span class="pill ip">today</span>' : ''}${isEvent(d) ? '<span class="pill ok">event</span>' : ''}</div>`;
+    l.filter(x => x.kind === 'mile').forEach(x => { h += `<div class="cal-it k-mile ${x.cls}">${icon(x.m.done ? 'check' : 'flag')}<div><b>${esc(x.m.label)}</b><div class="small muted">${x.m.kind === 'gate' ? 'must-have gate' : x.m.kind === 'event' ? 'event' : 'deadline'}${x.m.done ? ' · done' : ''}</div></div></div>`; });
+    l.filter(x => x.kind === 'meet').forEach(x => { h += `<div class="cal-it k-meet">${icon('clock')}<div><b>${esc([x.m.time, x.m.what || 'Meeting'].filter(Boolean).join(' · '))}</b>${x.m.where ? `<div class="small muted">${esc(x.m.where)}</div>` : ''}</div></div>`; });
+    if (tasks.length) h += `<div class="cal-tasks">${tasks.map(t => taskCard(ctx, t, { showOwner: who !== 'me' })).join('')}</div>`;
+    if (!l.length) h += `<p class="muted" style="margin:0 0 4px">Nothing on this day.</p>`;
+    if (ctx.isLead) h += `<div class="actions"><button type="button" class="btn soft sm" id="cal-add">${icon('plus')} Task on this day</button></div>`;
+    return h + '</div>';
+  };
+  const next = Object.keys(items).filter(d => d >= today).sort().flatMap(d => items[d].filter(x => x.kind !== 'task' || x.t.status !== 'Done').map(x => [d, x])).slice(0, 6);
+  const upcoming = `<div class="card"><div class="card-h"><h3>Coming up</h3></div><ul class="cal-up">${next.map(([d, x]) => `<li><button type="button" class="linkbtn" data-go="${d}">${esc(fmtDay(d))}</button>${chip(x)}</li>`).join('') || '<li class="muted">Nothing coming up.</li>'}</ul></div>`;
+
+  ctx.el.innerHTML = `<p class="lede">All times are ${esc(tz)} time. Can't come to a meeting? Post your 3 lines (finished · next · blocked) in the group before it starts.</p>
+    <div class="cal-wrap"><div class="card flush cal">
+      <div class="cal-head"><div class="row" style="gap:4px;flex-wrap:nowrap"><button type="button" class="icon-btn" data-nav="-1" aria-label="Previous month">${icon('left')}</button><h2 aria-live="polite">${esc(title)}</h2><button type="button" class="icon-btn" data-nav="1" aria-label="Next month">${icon('right')}</button></div>
+        <button type="button" class="btn ghost sm" data-nav="0">Today</button><span class="spacer"></span>${whoCtl}</div>
+      <div class="cal-grid" role="group" aria-label="${esc(title)}">${WD.map(w => `<div class="cal-wd" aria-hidden="true">${w}</div>`).join('')}${days.map(cell).join('')}</div>
+      <div class="cal-legend small muted"><span><i class="dt k-task open"></i>to do</span><span><i class="dt k-task over"></i>overdue</span><span><i class="dt k-task blk"></i>blocked</span><span><i class="dt k-task done"></i>done</span><span><i class="dt k-meet"></i>meeting</span><span><i class="dt k-mile gate"></i>milestone</span>${isDay(ev.start) ? '<span><i class="dt ev"></i>event days</span>' : ''}</div>
+    </div><div class="cal-side">${dayPanel()}${upcoming}</div></div>`;
+
+  const redraw = focus => {
+    history.replaceState(null, '', location.pathname + location.search + '#/calendar?m=' + cal.month);
+    calendar(ctx);
+    if (focus) { const c = ctx.el.querySelector('.cal-d.sel'); if (c) c.focus(); }
+  };
+  ctx.el.onclick = e => {
+    const nav = e.target.closest('[data-nav]');
+    if (nav) { const n = Number(nav.dataset.nav); cal.month = n ? monthAdd(cal.month, n) : today.slice(0, 7); cal.day = n ? '' : today; return redraw(); }
+    const dd = e.target.closest('[data-day],[data-go]');
+    if (dd) {
+      cal.day = dd.dataset.day || dd.dataset.go; cal.month = cal.day.slice(0, 7); redraw(false);
+      const panel = $('.cal-day', ctx.el), r = panel && panel.getBoundingClientRect();
+      if (r && (r.top > innerHeight - 80 || r.bottom < 0)) panel.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+      return;
+    }
+    const w = e.target.closest('[data-who]');
+    if (w) { cal.who = w.dataset.who; return redraw(); }
+    if (e.target.closest('#cal-add')) taskDrawer(ctx, null, { due: cal.day + ' 20:00', owner: who === 'me' ? D.me.key : who !== 'all' ? who : '' });
+  };
+  const sel = $('#cal-p'); if (sel) sel.onchange = e => { cal.who = e.target.value || 'all'; redraw(); };
+  $('.cal-grid', ctx.el).onkeydown = e => {
+    const k = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 }[e.key];
+    if (!k) return;
+    e.preventDefault(); cal.day = ymdAdd(cal.day, k); cal.month = cal.day.slice(0, 7); redraw(true);
+  };
+  const tl = $('.cal-tasks', ctx.el);
+  if (tl) wireTasks(tl, ctx, t => { ctx.patchTask(t); calendar(ctx); });
 }
 
 export function team(ctx) {
@@ -71,16 +143,17 @@ export function rules(ctx) {
 }
 
 export function profile(ctx) {
-  const D = ctx.D, me = D.me, bot = D.bot, s = ctx.api.session() || {}, viewer = ctx.isViewer;
+  const D = ctx.D, me = D.me, bot = D.bot, s = ctx.api.session() || {}, viewer = ctx.isViewer, acc = me.account, start = me.tg_start || s.t || '';
   const NOTE = { auto: 'Telegram if connected, otherwise email', telegram: 'Telegram only', email: 'Email only', both: 'Telegram and email', none: 'No reminders' };
   let h = `<div class="card"><div class="person-card">${avatar(me.name, 'lg')}<div class="info"><h2>${esc(me.name)}</h2><div class="muted">${esc(me.role || '')} · <span class="pill ${esc(me.access)}">${esc(me.access)}</span></div></div></div></div>`;
+  if (D.accounts && !viewer) h += accountCard(D, me, acc);
   if (!viewer) {
     h += `<div class="grid-2"><div class="card"><div class="card-h"><h3>Reminders</h3><span class="sub">the evening before a deadline, at ${esc(D.event.reminderHour)}:00</span></div>
       <form id="prefs">${field({ label: 'How should the hub reach you?', name: 'notify', type: 'select', value: me.notify, options: Object.entries(NOTE) })}
-      ${field({ label: 'Email', name: 'email', type: 'email', value: me.email || '', placeholder: 'you@example.com', hint: 'Only the hub uses it — for your link and reminders.' })}
+      ${field({ label: 'Email', name: 'email', type: 'email', value: me.email || '', placeholder: 'you@example.com', hint: 'Only the hub uses it — for reminders, and for messages when your tasks change.' })}
       <button class="btn primary" type="submit">Save</button></form></div>`;
     if (bot) {
-      const cmd = `/start ${s.t || ''}`, link = `https://t.me/${bot}?start=${s.t || ''}`;
+      const cmd = `/start ${start}`, link = `https://t.me/${bot}?start=${start}`;
       h += `<div class="card"><div class="card-h"><h3>Telegram</h3>${me.telegram ? `<span class="pill ok">${icon('check')} connected</span>` : '<span class="pill">not connected</span>'}</div>
         ${me.telegram ? `<p>Reminders and messages come from <b>@${esc(bot)}</b>. Send it /tasks any time.</p>` : `<p>Press the button — Telegram opens <b>@${esc(bot)}</b> — then press <b>Start</b>.</p>`}
         <div class="actions"><a class="btn ${me.telegram ? 'ghost' : 'primary'}" href="${esc(link)}" target="_blank" rel="noopener">${icon('message')} ${me.telegram ? 'Open the bot' : 'Connect Telegram'}</a>${me.telegram ? '<button class="btn danger ghost" id="tgdis">Disconnect</button>' : ''}</div>
@@ -90,7 +163,8 @@ export function profile(ctx) {
     }
     h += `</div>`;
   }
-  h += `<div class="card"><div class="card-h"><h3>Your link</h3></div><p>Your personal link is your key to the hub — like a password. Don't share it. Lost it? On the sign-in page choose “Email me my link”${viewer ? '' : ', or ask ' + esc(D.event.contact)}.</p>
+  h += acc ? `<div class="card"><div class="card-h"><h3>This device</h3></div><p class="muted" style="margin-top:0">Signed in as <b>${esc(acc.username)}</b>.</p><div class="actions"><button class="btn ghost" id="out">${icon('logout')} Sign out on this device</button></div></div>`
+    : `<div class="card"><div class="card-h"><h3>Your link</h3></div><p>Your personal link is your key to the hub — like a password. Don't share it. Lost it? On the sign-in page choose “Email me how to sign in”${viewer ? '' : ', or ask ' + esc(D.event.contact)}.</p>
     <div class="actions"><button class="btn ghost" id="out">${icon('logout')} Sign out on this device</button></div></div>`;
   ctx.el.innerHTML = h;
   const f = $('#prefs');
@@ -100,7 +174,53 @@ export function profile(ctx) {
     if (!r.ok) return toast(r.error, 'err');
     Object.assign(D.me, r.me); toast('Saved.');
   };
-  const c = $('#tgcopy'); if (c) c.onclick = () => copy(`/start ${s.t}`, 'Copied — paste it in the bot chat.');
+  const c = $('#tgcopy'); if (c) c.onclick = () => copy(`/start ${start}`, 'Copied — paste it in the bot chat.');
   const d = $('#tgdis'); if (d) d.onclick = async () => { busy(d, true); const r = await ctx.api.post('tgdisconnect'); busy(d, false); if (!r.ok) return toast(r.error, 'err'); D.me.telegram = false; toast('Disconnected.'); ctx.render(); };
   $('#out').onclick = () => { ctx.api.signOut(); location.hash = '#/'; location.reload(); };
+  wireAccount(ctx);
+}
+
+/** Own-server hubs: make a username + password (the personal link then stops working), or change it. */
+function accountCard(D, me, acc) {
+  if (!acc) return `<form class="card" id="acc-new"><div class="card-h"><h3>Make your password</h3><span class="sub">sign in on any phone or computer</span></div>
+    <p class="small muted" style="margin-top:0">Pick a username and a password. After this your personal link <b>stops working</b> — you sign in with these instead, and your browser can remember them. Telegram stays connected.</p>
+    <div class="form-grid">
+      <div class="field"><label for="acc-u">Username</label><input id="acc-u" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required minlength="3" maxlength="30" pattern="[a-z0-9][a-z0-9._\\-]{2,29}" value="${esc(me.key)}"><small class="hint">small letters, digits, dot, dash or underscore</small></div>
+      <div class="field"><label for="acc-p">Password</label><input id="acc-p" name="password" type="password" autocomplete="new-password" required minlength="8" maxlength="128"><small class="hint">8 or more characters — a short sentence works well</small></div>
+      <div class="field"><label for="acc-p2">Password again</label><input id="acc-p2" name="password2" type="password" autocomplete="new-password" required minlength="8" maxlength="128"></div>
+    </div><button class="btn primary" type="submit">${icon('check')} Make my password</button></form>`;
+  return `<form class="card" id="acc-chg"><div class="card-h"><h3>Your sign-in</h3><span class="pill ok">${icon('check')} password</span></div>
+    <p style="margin-top:0">You sign in as <b>${esc(acc.username)}</b>. Forgot your password? Ask ${esc(D.event.contact || 'your lead')} to reset your sign-in.</p>
+    <input type="text" name="username" autocomplete="username" value="${esc(acc.username)}" hidden>
+    <div class="form-grid"><div class="field"><label for="acc-c">Current password</label><input id="acc-c" name="current" type="password" autocomplete="current-password" required></div>
+      <div class="field"><label for="acc-n">New password</label><input id="acc-n" name="password" type="password" autocomplete="new-password" required minlength="8" maxlength="128"></div></div>
+    <div class="actions"><button class="btn primary" type="submit">Change password</button><button class="btn ghost" type="button" id="acc-all">${icon('logout')} Sign out on all other devices</button></div></form>`;
+}
+function wireAccount(ctx) {
+  const fn = $('#acc-new');
+  if (fn) fn.onsubmit = async e => {
+    e.preventDefault();
+    const v = { username: fn.username.value.trim().toLowerCase(), password: fn.password.value };
+    if (v.password !== fn.password2.value) return toast('The two passwords are different.', 'err');
+    if (!await confirmBox({ title: 'Switch to a password?', text: `After this your personal link stops working. You sign in as <b>${esc(v.username)}</b> with your password — on any device.`, ok: 'Yes, make it' })) return;
+    const b = fn.querySelector('[type=submit]'); busy(b, true, 'Saving…');
+    const r = await ctx.api.post('account.create', v); busy(b, false);
+    if (!r.ok) return toast(r.error, 'err');
+    ctx.api.setSession({ u: r.u, t: r.t });
+    toast(`Done — you sign in as ${r.username} now.`);
+    await ctx.refresh();
+  };
+  const fc = $('#acc-chg');
+  if (!fc) return;
+  fc.onsubmit = async e => {
+    e.preventDefault(); const b = fc.querySelector('[type=submit]'); busy(b, true);
+    const r = await ctx.api.post('account.password', { current: fc.current.value, password: fc.password.value }); busy(b, false);
+    if (!r.ok) return toast(r.error, 'err');
+    fc.current.value = ''; fc.password.value = ''; toast('Password changed. Your other devices were signed out.');
+  };
+  $('#acc-all').onclick = async e => {
+    const b = e.currentTarget; busy(b, true, 'Signing out…');
+    const r = await ctx.api.post('logout.all'); busy(b, false);
+    toast(r.ok ? 'Signed out on every other device.' : r.error, r.ok ? 'ok' : 'err');
+  };
 }

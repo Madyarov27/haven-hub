@@ -1,5 +1,5 @@
 /**
- * Haven Hub — the backend for one Haven's Team Hub.                                             v4.0.0
+ * Haven Hub — the backend for one Haven's Team Hub.                                             v4.2.0
  *
  * A Google Sheet is the database (you can edit it by hand). This script, bound to that Sheet, is:
  *   - the JSON API for the website  https://notazizelse.github.io/haven-hub/?hub=<your deployment id>
@@ -15,7 +15,7 @@
  * The URL stays the same. Secrets never go in this file: personal tokens live in the Sheet, the bot token in Script properties.
  */
 
-const HUB_VERSION = '4.1.1';
+const HUB_VERSION = '4.2.0';
 // On your own server (server/index.mjs) this same file runs on Node; HUB_SERVER is then provided by the server.
 const SELF_HOSTED = typeof HUB_SERVER !== 'undefined' && !!HUB_SERVER;
 const DEFAULT_SITE = 'https://notazizelse.github.io/haven-hub';
@@ -58,6 +58,7 @@ const SETTINGS = [
   ['email_reminders', 'yes', 'Email reminders to people who have not connected Telegram'],
   ['done_alerts', 'yes', 'Telegram DM to leads (with photos) every time a task is done'],
   ['group_done_posts', 'yes', 'Post finished tasks + weekly report in the Telegram group'],
+  ['change_alerts', 'yes', 'Tell people when their tasks are added, removed, moved or get a new date (admins get a copy)'],
   ['public_page', 'yes', 'Show a public event page at the hub link (no personal link needed)'],
   ['tagline', 'A weekend game jam for teenagers, run by teenagers.', 'One line under the event name on the public page'],
   ['signup_url', '', 'Participant signup page, e.g. https://haven.hackclub.com/yourcity'],
@@ -71,7 +72,7 @@ const SETTINGS = [
   ['join_intro', 'We need help with design, social media, outreach, tech and the event weekend. No experience needed.', 'Text above the join form'],
   ['moved_to', '', 'Set when the hub moved to its own server: every request is sent to this address. Clear it to switch this Sheet back on'],
 ];
-const YESNO = ['weekly_report', 'email_reminders', 'done_alerts', 'group_done_posts', 'public_page', 'public_show_progress', 'public_show_team', 'join_form'];
+const YESNO = ['weekly_report', 'email_reminders', 'done_alerts', 'group_done_posts', 'change_alerts', 'public_page', 'public_show_progress', 'public_show_team', 'join_form'];
 const URL_KEYS = ['site_url', 'signup_url', 'instagram', 'telegram_channel', 'website', 'moved_to'];
 
 /** Optional starter checklist added at setup. Days are relative to event_start. Edit or delete freely. */
@@ -297,10 +298,20 @@ function first_(p) { return String(p.name || '').split(' ')[0]; }
 function tag_(p) { return /^@\w+/.test(p.handle || '') ? ' ' + p.handle : ''; }
 function nameOf_(key) { const p = people_().find(x => x.key === key); return p ? p.name : key; }
 function newToken_() { return Utilities.getUuid().replace(/-/g, ''); }
-/** Every personal link carries the hub, the person's key (their name) and their secret token. The server refuses a key/token mismatch. */
-function linkFor_(p) { const h = S_().hub_id; return site_() + '/?' + (h ? 'hub=' + h + '&' : '') + 'u=' + encodeURIComponent(p.key) + '&t=' + p.token; }
+/** Password sign-in exists only on your own server (server/accounts.mjs): { username } or null. */
+function account_(p) { return SELF_HOSTED && p && p.key && typeof HUB_SERVER.account === 'function' ? HUB_SERVER.account(p.key) : null; }
+/** Server only: removes someone's password + signs them out everywhere (Reset sign-in, removed from the team). */
+function dropAccount_(p) { if (SELF_HOSTED && p && typeof HUB_SERVER.dropAccount === 'function') HUB_SERVER.dropAccount(p.key); }
+/** Every personal link carries the hub, the person's key (their name) and their secret token. The server refuses a key/token mismatch.
+ *  Someone who made a password gets the sign-in page instead: their links carry no key any more. */
+function linkFor_(p) {
+  const h = S_().hub_id;
+  if (account_(p)) return site_() + '/' + (h ? '?hub=' + h : '') + '#/signin';
+  return site_() + '/?' + (h ? 'hub=' + h + '&' : '') + 'u=' + encodeURIComponent(p.key) + '&t=' + p.token;
+}
 function inviteText_(p) {
-  const link = linkFor_(p), g = S_().greeting || 'Hi';
+  const link = linkFor_(p), g = S_().greeting || 'Hi', acc = account_(p);
+  if (acc) return `${g}, ${first_(p)}! Sign in to the ${event_()} Team Hub with your username "${acc.username}" and your password:\n${link}\n\nForgot your password? Ask ${contact_()} to reset your sign-in.`;
   if (access_(p) === 'viewer') return `${g}, ${first_(p)}! Here is your read-only guest link to the ${event_()} Team Hub:\n${link}\n\nYou can see our progress and deadlines. Please don't share it.`;
   return `${g}, ${first_(p)}! This is your personal ${event_()} Team Hub link (only for ${p.name}):\n${link}\n\n` +
     `Open it → read your first task → press Start.\nFinished → Done + proof. Stuck → Blocked + what you need.\nDon't share it — it's your key.`;
@@ -314,7 +325,7 @@ function keyFor_(name) {
 }
 function personOut_(p) {
   return { key: p.key, name: p.name, role: p.role, area: p.area, handle: p.handle, email: p.email, access: access_(p), notify: p.notify || 'auto',
-    active: p.active !== 'no', telegram: !!p.chat_id, hasLink: !!p.token, backup: p.backup, works: p.works, weekend: p.weekend, one: p.one, ask: p.ask, joined_at: p.joined_at };
+    active: p.active !== 'no', telegram: !!p.chat_id, hasLink: !!p.token, password: !!account_(p), backup: p.backup, works: p.works, weekend: p.weekend, one: p.one, ask: p.ask, joined_at: p.joined_at };
 }
 
 // ================================================================== tasks
@@ -364,27 +375,22 @@ function addTasks_(me, b) {
   const now = now_(), made = ps.slice(0, 50).map(p => Object.assign({}, base, { id: idFor_(n++), owner: p.key, created_by: me.key, updated_at: now }));
   appendMany_('Tasks', made);
   logMany_(made.map(t => [me.name, t.id, 'Added', t.owner + ': ' + t.title]));
-  announce_(made);
+  tellChanges_(me, made.map(t => [null, snap_(t)]), b);
+  groupNew_(made);
   return { ok: true, task: taskOut_(made[0]), tasks: made.map(taskOut_) };
 }
-/** Tells each owner about their new tasks (one message per person) and posts one line in the group. */
-function announce_(tasks) {
+/** One line in the organizer group about new tasks (owners hear about them through the change alerts). */
+function groupNew_(tasks) {
+  if (!tasks.length) return;
   const by = {};
   tasks.forEach(t => { (by[t.owner] = by[t.owner] || []).push(t); });
-  Object.keys(by).forEach(k => {
-    const p = people_().find(q => q.key === k), list = by[k];
-    if (!p || p.active === 'no') return;
-    const lines = list.slice(0, 15).map(t => `• ${t.id} ${t.title} — due ${t.due}`).join('\n');
-    notify_(p, { text: `🆕 New task${list.length > 1 ? 's' : ''} for you:\n${lines}\n\n${linkFor_(p)}`, subject: list.length > 1 ? `${list.length} new tasks for you` : `New task: ${list[0].title}`, button: ['Open my tasks', linkFor_(p)] });
-  });
-  const keys = Object.keys(by);
   if (tasks.length === 1) { const t = tasks[0], p = people_().find(q => q.key === t.owner) || { name: t.owner }; postGroup_(`🆕 New task for ${p.name}${tag_(p)}: ${t.id} — ${t.title} (due ${t.due})`); }
-  else if (tasks.length) postGroup_(`🆕 ${tasks.length} new tasks: ` + keys.map(k => `${nameOf_(k)} (${by[k].length})`).join(', '));
+  else postGroup_(`🆕 ${tasks.length} new tasks: ` + Object.keys(by).map(k => `${nameOf_(k)} (${by[k].length})`).join(', '));
 }
 function editTask_(me, b) {
   const x = b.task || {}, t = rows_('Tasks').find(q => q.id === String(x.id || b.id || ''));
   if (!t) return { ok: false, error: 'No such task.' };
-  const errs = [], prevOwner = t.owner;
+  const errs = [], before = snap_(t), prevOwner = t.owner;
   taskFields_(x, t, errs, false);
   if (x.owner !== undefined && x.owner !== t.owner) { const p = ownerFor_(x.owner); if (!p) errs.push('Unknown owner: ' + x.owner); else t.owner = p.key; }
   if (x.status !== undefined && x.status !== t.status) {
@@ -393,30 +399,34 @@ function editTask_(me, b) {
   }
   if (errs.length) return { ok: false, error: errs[0], errors: errs };
   t.updated_at = now_(); write_('Tasks', t);
-  log_(me.name, t.id, 'Edited', Object.keys(x).filter(k => k !== 'id').join(', '));
-  if (t.owner !== prevOwner) announce_([t]);
+  log_(me.name, t.id, 'Edited', editNote_(before, snap_(t)));
+  tellChanges_(me, [[before, snap_(t)]], b);
+  if (t.owner !== prevOwner) groupNew_([t]);
   return { ok: true, task: taskOut_(t) };
 }
 function bulkTasks_(me, b) {
   const ids = (Array.isArray(b.ids) ? b.ids : []).map(String).slice(0, 500), op = String(b.op || '');
   const tasks = rows_('Tasks').filter(t => ids.indexOf(t.id) >= 0);
   if (!tasks.length) return { ok: false, error: 'Select at least one task.' };
-  let note = '';
+  const before = tasks.map(snap_);
+  let note = '', moved = [];
   if (op === 'reassign') {
     const p = ownerFor_(b.owner); if (!p) return { ok: false, error: 'Choose a new owner.' };
-    const moved = tasks.filter(t => t.owner !== p.key); moved.forEach(t => { t.owner = p.key; });
-    note = 'to ' + p.key; if (moved.length) { moved.forEach(t => { t.updated_at = now_(); }); writeMany_('Tasks', moved); announce_(moved); }
+    moved = tasks.filter(t => t.owner !== p.key); moved.forEach(t => { t.owner = p.key; });
+    note = 'to ' + p.key; if (moved.length) { moved.forEach(t => { t.updated_at = now_(); }); writeMany_('Tasks', moved); }
   } else if (op === 'shift') {
     const d = parseInt(b.days, 10); if (!d || Math.abs(d) > 365) return { ok: false, error: 'Days must be between -365 and 365.' };
     tasks.forEach(t => { if (normDue_(t.due)) t.due = addDays_(t.due.slice(0, 10), d) + t.due.slice(10, 16); }); note = (d > 0 ? '+' : '') + d + ' days';
   } else if (op === 'status') {
     if (['Not started', 'In progress', 'Dropped'].indexOf(b.status) < 0) return { ok: false, error: 'Bulk status can be Not started, In progress or Dropped.' };
-    tasks.forEach(t => { t.status = b.status; if (b.status === 'Not started') { t.done_at = ''; t.review = ''; } }); note = b.status;
+    tasks.forEach(t => { t.status = b.status; if (b.status === 'Not started') { t.done_at = ''; t.review = ''; t.reviewed_by = ''; } }); note = b.status;
   } else if (op === 'area') {
     const a = clean_(b.area, 40); tasks.forEach(t => { t.area = a; }); note = a;
   } else return { ok: false, error: 'Unknown bulk action.' };
   if (op !== 'reassign') { const now = now_(); tasks.forEach(t => { t.updated_at = now; }); writeMany_('Tasks', tasks); }
   logMany_(tasks.map(t => [me.name, t.id, 'Bulk ' + op, note]));
+  tellChanges_(me, tasks.map((t, i) => [before[i], snap_(t)]), b);
+  groupNew_(moved);
   return { ok: true, tasks: tasks.map(taskOut_) };
 }
 function importTasks_(me, b) {
@@ -435,16 +445,218 @@ function importTasks_(me, b) {
   made.forEach(t => { t.id = idFor_(n++); t.created_by = me.key; t.updated_at = now; });
   appendMany_('Tasks', made);
   logMany_([[me.name, '', 'Imported', made.length + ' tasks']]);
-  announce_(made);
+  tellChanges_(me, made.map(t => [null, snap_(t)]), b);
+  groupNew_(made);
   return { ok: true, count: made.length, tasks: made.map(taskOut_) };
 }
 function deleteTasks_(me, b) {
   const ids = (Array.isArray(b.ids) ? b.ids : [b.id]).map(String), tasks = rows_('Tasks').filter(t => ids.indexOf(t.id) >= 0);
   if (!tasks.length) return { ok: false, error: 'No such task.' };
-  const info = tasks.map(t => [me.name, t.id, 'Deleted', t.owner + ': ' + t.title]);
+  const info = tasks.map(t => [me.name, t.id, 'Deleted', t.owner + ': ' + t.title]), before = tasks.map(snap_);
   deleteRows_('Tasks', tasks);
   logMany_(info);
+  tellChanges_(me, before.map(s => [s, null]), b);
   return { ok: true, deleted: tasks.map(t => t.id) };
+}
+
+/** "Update the whole plan" (admin): a CSV with every task. A row with an id updates that task (status and proof stay), a row without one is a new task.
+ *  dropMissing: open tasks that are not in the file become Dropped (finished tasks are never touched).
+ *  renumber: afterwards every task gets a new id in due-date order (T001 = first due), dropped ones last.
+ *  dryRun: only says what would change. Everyone affected gets ONE message about their new plan. */
+function syncTasks_(me, b) {
+  const rows = Array.isArray(b.rows) ? b.rows.slice(0, 1000) : [];
+  if (!rows.length) return { ok: false, error: 'Nothing to import.' };
+  const all = rows_('Tasks'), byId = {}, seen = {}, errors = [], plan = [];
+  all.forEach(t => { byId[t.id] = t; });
+  rows.forEach((x, i) => {
+    x = x || {};
+    const e = [], id = clean_(x.id, 12).toUpperCase(), cur = id ? byId[id] || null : null;
+    if (id && !cur) e.push(`There is no task ${id} — leave the id empty for a new task`);
+    if (id && seen[id]) e.push(`${id} is in the file twice`);
+    if (id) seen[id] = true;
+    const t = cur ? Object.assign({}, cur) : { status: 'Not started' };
+    taskFields_(x, t, e, !cur);
+    const p = ownerFor_(x.owner);
+    if (!p) e.push(x.owner ? `Unknown owner "${String(x.owner).slice(0, 30)}"` : 'Owner is missing'); else t.owner = p.key;
+    if (e.length) errors.push({ row: i + 1, errors: e }); else plan.push({ cur: cur, t: t });
+  });
+  if (errors.length) return { ok: false, dryRun: !!b.dryRun, errors: errors, error: `${errors.length} row(s) have problems — fix them and check again. Nothing was changed.` };
+  const inFile = {};
+  plan.forEach(x => { if (x.cur) inFile[x.cur.id] = true; });
+  const drop = b.dropMissing ? all.filter(t => !inFile[t.id] && ['Done', 'Dropped'].indexOf(t.status) < 0) : [];
+  const changed = x => !x.cur || SYNC_FIELDS.some(k => String(x.cur[k] || '') !== String(x.t[k] || ''));
+  const befores = plan.map(x => snap_(x.cur)).concat(drop.map(snap_));
+  const nNew = plan.filter(x => !x.cur).length, nUpd = plan.filter(x => x.cur && changed(x)).length;
+  if (b.dryRun) {
+    const items = [];
+    plan.forEach((x, i) => diffTask_(befores[i], snap_(x.t)).forEach(it => items.push(it)));
+    drop.forEach((t, j) => diffTask_(befores[plan.length + j], snap_(Object.assign({}, t, { status: 'Dropped' }))).forEach(it => items.push(it)));
+    const per = {};
+    items.forEach(it => {
+      const c = per[it.key] = per[it.key] || { key: it.key, name: nameOf_(it.key), added: 0, removed: 0, dates: 0, edits: 0 };
+      c[CHANGE_GROUP[it.kind]]++;
+    });
+    return { ok: true, dryRun: true, count: plan.length, added: nNew, updated: nUpd, dropped: drop.length, unchanged: plan.length - nNew - nUpd,
+      people: Object.keys(per).map(k => per[k]), changes: items.slice(0, 300).map(it => ({ who: nameOf_(it.key), text: changeLines_([it])[0] })) };
+  }
+  flushChanges(true); // alerts still waiting go out first, with the task numbers they were written with
+  const now = now_(), upd = [], add = [];
+  let n = nextNum_();
+  plan.forEach(x => {
+    if (x.cur) { if (changed(x)) { Object.assign(x.cur, x.t, { updated_at: now }); upd.push(x.cur); } }
+    else { x.t.id = idFor_(n++); x.t.created_by = me.key; x.t.updated_at = now; add.push(x.t); }
+  });
+  drop.forEach(t => { t.status = 'Dropped'; t.updated_at = now; upd.push(t); });
+  writeMany_('Tasks', upd);
+  appendMany_('Tasks', add);
+  let map = null;
+  if (b.renumber) {
+    const num = id => { const m = String(id).match(/^T(\d+)$/); return m ? Number(m[1]) : 1e9; };
+    const list = rows_('Tasks').slice().sort((p, q) => ((p.status === 'Dropped') - (q.status === 'Dropped')) || (p.due < q.due ? -1 : p.due > q.due ? 1 : 0) || num(p.id) - num(q.id));
+    map = {};
+    list.forEach((t, i) => { map[t.id] = idFor_(i + 1); });
+    list.forEach(t => { t.id = map[t.id]; });
+    replaceAll_('Tasks', list);
+  }
+  const pairs = plan.map((x, i) => [befores[i], snap_(x.cur || x.t)]).concat(drop.map((t, j) => [befores[plan.length + j], snap_(t)]));
+  tellChanges_(me, pairs, b, { plan: true, now: true });
+  if (b.notify !== false && S_().change_alerts !== 'no') postGroup_(`🗂 The task plan was updated: ${nNew} new, ${nUpd} changed, ${drop.length} dropped${map ? ', and every task has a new number in date order' : ''}. Everyone got a message with their part.`);
+  log_(me.name, '', 'Plan updated', `${nNew} new, ${nUpd} changed, ${drop.length} dropped${map ? ', renumbered by date' : ''}`);
+  const moves = map ? Object.keys(map).filter(k => k !== map[k]) : [];
+  if (moves.length) report_('Tasks renumbered', moves.map(k => k + ' → ' + map[k]).join(', '));
+  return { ok: true, added: nNew, updated: nUpd, dropped: drop.length, renumbered: map };
+}
+const SYNC_FIELDS = ['owner', 'title', 'due', 'mins', 'why', 'steps', 'done_when', 'links', 'ask', 'area'];
+
+// ================================================================== task-change alerts (added / removed / moved / new date)
+const CHANGE_GROUP = { added: 'added', restored: 'added', 'moved-in': 'added', removed: 'removed', dropped: 'removed', 'moved-away': 'removed', date: 'dates', renamed: 'edits', details: 'edits' };
+/** The parts of a task its owner cares about, to spot what changed. */
+function snap_(t) { return t ? { id: t.id || '', owner: t.owner, title: t.title, due: t.due, status: t.status || 'Not started', details: [t.why, t.steps, t.done_when, t.links, t.ask].join('\u0001') } : null; }
+/** Before/after snapshots of one task → what its owner(s) should hear. a = null: a new task; b = null: deleted. */
+function diffTask_(a, b) {
+  const out = [], t = b || a, it = (key, kind, from, to) => out.push({ key: key, kind: kind, id: t.id, title: t.title, due: t.due, from: from || '', to: to || '' });
+  const off = s => !s || s.status === 'Dropped';
+  if (off(a) && off(b)) return out;
+  if (off(a)) { it(b.owner, a ? 'restored' : 'added'); return out; }
+  if (!b) { it(a.owner, 'removed'); return out; }
+  if (b.status === 'Dropped') { it(a.owner, 'dropped'); return out; }
+  if (a.owner !== b.owner) { it(a.owner, 'moved-away', '', b.owner); it(b.owner, 'moved-in', a.owner); return out; }
+  if (a.due !== b.due) it(b.owner, 'date', a.due, b.due);
+  if (a.title !== b.title) it(b.owner, 'renamed', a.title, b.title);
+  if (a.details !== b.details) it(b.owner, 'details');
+  return out;
+}
+function editNote_(a, b) {
+  const n = [];
+  if (a.due !== b.due) n.push(`due ${a.due} → ${b.due}`);
+  if (a.owner !== b.owner) n.push(`owner ${a.owner} → ${b.owner}`);
+  if (a.title !== b.title) n.push('title');
+  if (a.status !== b.status) n.push('status ' + b.status);
+  if (a.details !== b.details) n.push('details');
+  return n.join('; ') || 'no change';
+}
+/** Turns [before, after] pairs into alerts. b.notify === false (the "Tell people" switch off) or the change_alerts setting stops them. */
+function tellChanges_(me, pairs, b, opts) {
+  const items = [];
+  pairs.forEach(p => diffTask_(p[0], p[1]).forEach(x => items.push(x)));
+  return queueChanges_(me, items, b, opts);
+}
+/** Apps Script: sends right away (one message per person per save). Own server: waits until the edits stop, so a burst of edits is one message. */
+function queueChanges_(me, items, b, opts) {
+  opts = opts || {};
+  if (!items.length || (b && (b.notify === false || b.notify === 'no')) || S_().change_alerts === 'no') return 0;
+  const at = Date.now();
+  items.forEach(x => { x.by = me ? me.name : 'system'; x.byKey = me ? me.key : ''; x.at = at; if (opts.plan) x.plan = 1; });
+  if (!SELF_HOSTED || opts.now) { sendChanges_(items); return items.length; }
+  let q = [];
+  try { q = JSON.parse(prop_('PENDING_CHANGES') || '[]'); } catch (e) { q = []; }
+  setProp_('PENDING_CHANGES', JSON.stringify(q.concat(items).slice(-3000)));
+  return items.length;
+}
+/** Own server, every 30 s: sends the waiting alerts once nobody edited for a minute (or 5 minutes after the first one at the latest). */
+function flushChanges(force) {
+  let q = [];
+  try { q = JSON.parse(prop_('PENDING_CHANGES') || '[]'); } catch (e) { q = []; }
+  if (!q.length) return 0;
+  const now = Date.now(), newest = q.reduce((m, x) => Math.max(m, x.at || 0), 0), oldest = q.reduce((m, x) => Math.min(m, x.at || now), now);
+  if (!force && now - newest < 60e3 && now - oldest < 300e3) return 0;
+  PropertiesService.getScriptProperties().deleteProperty('PENDING_CHANGES');
+  sendChanges_(q);
+  return q.length;
+}
+const WD_ = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], MON_ = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** "2026-10-16 18:00" → "Fri 16 Oct 18:00" */
+function niceDue_(s) {
+  s = String(s || '');
+  if (!/^\d{4}-\d\d-\d\d/.test(s)) return s;
+  const d = new Date(s.slice(0, 10) + 'T12:00:00Z');
+  return WD_[d.getUTCDay()] + ' ' + d.getUTCDate() + ' ' + MON_[d.getUTCMonth()] + (s.length > 10 ? ' ' + s.slice(11, 16) : '');
+}
+/** One line per task; several changes to the same task become one line. Added-then-removed within one batch says nothing. */
+function changeLines_(items) {
+  const by = {}, order = [];
+  items.forEach(x => { const k = x.id || 'new:' + x.title; if (!by[k]) { by[k] = []; order.push(k); } by[k].push(x); });
+  return order.map(k => {
+    const xs = by[k], last = xs[xs.length - 1], id = last.id ? last.id + ' ' : '', has = kind => xs.filter(x => x.kind === kind).pop();
+    const came = has('added') || has('restored') || has('moved-in'), left = has('removed') || has('dropped') || has('moved-away');
+    if (came && left) return null;
+    if (has('removed')) return `🗑 ${id}${last.title} — removed`;
+    if (has('dropped')) return `🗑 ${id}${last.title} — dropped, no need to do it`;
+    if (has('moved-away')) return `↪️ ${id}${last.title} — moved to ${nameOf_(has('moved-away').to)}`;
+    if (came) return `🆕 ${id}${last.title} — due ${niceDue_(last.due)}` + (came.kind === 'moved-in' ? ` (was ${nameOf_(came.from)}'s)` : came.kind === 'restored' ? ' (back on your list)' : '');
+    const d = has('date'), r = has('renamed'), parts = [];
+    if (d) parts.push(`now ${niceDue_(d.to)} (was ${niceDue_(d.from)})`);
+    if (r) parts.push(`renamed from "${r.from}"`);
+    if (has('details')) parts.push('details updated');
+    return `${d ? '📅' : '✏️'} ${id}${last.title} — ${parts.join(' · ')}`;
+  }).filter(Boolean);
+}
+function changeCounts_(list) {
+  const c = { added: 0, removed: 0, dates: 0, edits: 0 }, seen = {};
+  list.forEach(x => { const k = x.kind + (x.id || x.title); if (!seen[k]) { seen[k] = 1; c[CHANGE_GROUP[x.kind]]++; } });
+  return [c.added && c.added + ' new', c.removed && c.removed + ' removed', c.dates && c.dates + ' new date' + (c.dates > 1 ? 's' : ''), c.edits && c.edits + ' updated'].filter(Boolean).join(' · ');
+}
+/** Sends the alerts: one message per task owner (Telegram, or email when Telegram isn't connected) and one summary per admin saying who was told how. */
+function sendChanges_(items) {
+  const people = people_(), groups = {}, keys = [], how = {}, lines = {};
+  items.forEach(x => { if (!groups[x.key]) { groups[x.key] = []; keys.push(x.key); } groups[x.key].push(x); });
+  const names = list => list.map(x => x.by).filter((v, i, a) => v && a.indexOf(v) === i);
+  keys.forEach(k => {
+    const p = people.find(q => q.key === k), list = groups[k];
+    lines[k] = changeLines_(list);
+    if (!lines[k].length) return;
+    if (!p || p.active === 'no') { how[k] = 'gone'; return; }
+    if (isAdmin_(p)) { how[k] = 'admin'; return; } // admins read their own changes in the summary below
+    if (list.every(x => x.byKey === k)) { how[k] = 'self'; return; }
+    how[k] = notify_(p, changeMessage_(p, list, lines[k], names(list).join(', '))) || '';
+  });
+  const shown = keys.filter(k => lines[k].length);
+  if (!shown.length) return;
+  const plan = items.some(x => x.plan), total = shown.reduce((s, k) => s + lines[k].length, 0), short = plan || total > 30;
+  const label = { telegram: 'told on Telegram', email: 'told by email', 'telegram+email': 'told on Telegram + email', '': '⚠️ not reached (no Telegram or email): tell them yourself',
+    self: 'their own change', admin: 'admin, gets this summary', gone: 'not on the team any more' };
+  activePeople_().filter(isAdmin_).forEach(a => {
+    const who = names(items).map(n => n === a.name ? 'you' : n).join(', ');
+    let text = `🧾 ${plan ? 'Task plan updated' : 'Task changes'} by ${who} — ${shown.length} ${shown.length === 1 ? 'person' : 'people'}\n`;
+    shown.forEach(k => {
+      const nm = k === a.key ? 'You' : nameOf_(k), st = k === a.key ? '' : ' — ' + (label[how[k]] !== undefined ? label[how[k]] : label['']);
+      text += short ? `\n${nm}${st}: ${changeCounts_(groups[k])}` : `\n${nm}${st}\n` + lines[k].slice(0, 6).join('\n') + (lines[k].length > 6 ? `\n…and ${lines[k].length - 6} more` : '') + '\n';
+    });
+    notify_(a, { text: text.trim(), subject: (plan ? 'Task plan updated' : 'Task changes') + ` — ${shown.length} ${shown.length === 1 ? 'person' : 'people'}`, button: ['Open all tasks', site_() + '/' + (S_().hub_id ? '?hub=' + S_().hub_id : '') + '#/admin/tasks'] });
+  });
+}
+function changeMessage_(p, list, lines, by) {
+  const link = linkFor_(p), plan = list.some(x => x.plan);
+  if (plan || lines.length > 8) {
+    const next = rows_('Tasks').filter(t => t.owner === p.key && ['Done', 'Dropped'].indexOf(t.status) < 0).sort((a, b) => a.due < b.due ? -1 : 1).slice(0, 5);
+    const text = `🗂 ${plan ? 'Your task plan was updated' : 'Your tasks changed'} (by ${by}): ${changeCounts_(list)}` +
+      (next.length ? '\n\nNext up:\n' + next.map(t => `• ${t.id} ${t.title} — ${niceDue_(t.due)}`).join('\n') : '') + `\n\nAll your tasks: ${link}`;
+    return { text: text, subject: plan ? 'Your task plan was updated' : `Your tasks changed (${lines.length})`, button: ['Open my tasks', link] };
+  }
+  const x = list[list.length - 1], one = lines.length === 1;
+  const subj = !one ? `Your tasks changed (${lines.length})` : /^🆕/.test(lines[0]) ? 'New task: ' + x.title : /^🗑/.test(lines[0]) ? 'Task removed: ' + x.title :
+    /^↪️/.test(lines[0]) ? 'Task moved: ' + x.title : /^📅/.test(lines[0]) ? 'New date: ' + x.title : 'Task changed: ' + x.title;
+  return { text: `📝 Your tasks changed (by ${by}):\n${lines.join('\n')}\n\n${link}`, subject: subj, button: ['Open my tasks', link] };
 }
 
 /** Start / Done / Blocked / Reopen — by the owner or a lead. Done needs proof, Blocked needs a reason. */
@@ -597,8 +809,13 @@ function deactivatePerson_(me, b) {
   let to = null;
   if (b.reassignTo) { to = ownerFor_(b.reassignTo); if (!to || to.key === p.key) return { ok: false, error: 'Choose who takes over their tasks.' }; }
   p.active = 'no'; p.chat_id = ''; p.token = ''; write_('People', p);
+  dropAccount_(p);
   const open = rows_('Tasks').filter(t => t.owner === p.key && ['Done', 'Dropped'].indexOf(t.status) < 0);
-  if (to && open.length) { open.forEach(t => { t.owner = to.key; t.updated_at = now_(); }); writeMany_('Tasks', open); announce_(open); }
+  if (to && open.length) {
+    const before = open.map(snap_);
+    open.forEach(t => { t.owner = to.key; t.updated_at = now_(); }); writeMany_('Tasks', open);
+    tellChanges_(me, open.map((t, i) => [before[i], snap_(t)]), b); groupNew_(open);
+  }
   log_(me.name, '', 'Person removed', p.name + (to ? ` — ${open.length} open task(s) to ${to.name}` : ''));
   refreshLinks();
   return { ok: true, person: personOut_(p), moved: to ? open.length : 0 };
@@ -610,19 +827,31 @@ function reactivatePerson_(me, b) {
   log_(me.name, '', 'Person re-added', p.name); refreshLinks();
   return { ok: true, person: personOut_(p), link: linkFor_(p), message: inviteText_(p) };
 }
-/** A link leaked: new token (old link stops working) and Telegram is unlinked. */
+/** A link leaked, or someone forgot their password: new token (old link stops working), the password is removed and Telegram is unlinked. */
 function resetLink_(me, b) {
   const p = findPerson_(b.key);
   if (!p || p.active === 'no') return { ok: false, error: 'No such person.' };
+  const had = !!account_(p);
+  dropAccount_(p);
   p.token = newToken_(); p.chat_id = ''; write_('People', p);
-  log_(me.name, '', 'Link reset', p.name); refreshLinks();
+  log_(me.name, '', had ? 'Sign-in reset' : 'Link reset', p.name); refreshLinks();
   return { ok: true, person: personOut_(p), link: linkFor_(p), message: inviteText_(p) };
 }
 function personLink_(me, b) {
   const p = findPerson_(b.key);
   if (!p || p.active === 'no') return { ok: false, error: 'No such person.' };
+  if (account_(p)) return { ok: false, code: 'password', error: `${first_(p)} signs in with a password, so there is no link to copy. Forgot it? Use "Reset sign-in" to give them a new link.` };
   if (!p.token) { p.token = newToken_(); write_('People', p); refreshLinks(); }
   return { ok: true, link: linkFor_(p), message: inviteText_(p) };
+}
+/** Own server: someone just made a password → a new secret, so every old link stops working. Telegram stays connected. */
+function rotateToken_(key) {
+  const p = findPerson_(key);
+  if (!p || p.active === 'no') return '';
+  p.token = newToken_(); write_('People', p);
+  log_(p.name, '', 'Password created', 'links switched off');
+  refreshLinks();
+  return p.token;
 }
 function invitePerson_(me, b) {
   const p = findPerson_(b.key);
@@ -780,6 +1009,7 @@ const ACTIONS = {
   'task.edit': { level: 'lead', post: true, lock: true, fn: editTask_ },
   'task.bulk': { level: 'lead', post: true, lock: true, fn: bulkTasks_ },
   'task.import': { level: 'lead', post: true, lock: true, fn: importTasks_ },
+  'task.sync': { level: 'admin', post: true, lock: true, fn: syncTasks_ },
   'task.delete': { level: 'admin', post: true, lock: true, fn: deleteTasks_ },
   'person.add': { level: 'admin', post: true, lock: true, fn: addPerson_ },
   'person.edit': { level: 'admin', post: true, lock: true, fn: editPerson_ },
@@ -860,7 +1090,9 @@ function apiMe_(me, q) {
   const out = {
     ok: true, version: HUB_VERSION, now: now_(), tz: tz_(), event: eventOut_(),
     me: { key: me.key, name: me.name, role: me.role, area: me.area, access: lvl, lead: isLead_(me), admin: isAdmin_(me), telegram: !!me.chat_id,
-      email: me.email, notify: me.notify || 'auto', backup: me.backup, works: me.works, weekend: me.weekend, one: me.one, ask: me.ask },
+      email: me.email, notify: me.notify || 'auto', backup: me.backup, works: me.works, weekend: me.weekend, one: me.one, ask: me.ask,
+      account: account_(me), tg_start: lvl === 'viewer' ? '' : me.token }, // tg_start: the code behind "Connect Telegram" (someone signed in with a password has no link to take it from)
+    accounts: SELF_HOSTED && typeof HUB_SERVER.account === 'function', // this hub offers password sign-in
     bot: prop_('BOT_USERNAME').replace(/^@/, ''),
     team: ppl.filter(p => access_(p) !== 'viewer').map(p => ({ key: p.key, name: p.name, role: p.role, area: p.area, access: access_(p), handle: lvl === 'viewer' ? '' : p.handle, one: p.one })),
     tasks: lvl === 'viewer' ? [] : all.filter(t => t.owner === me.key).map(taskOut_),
@@ -1082,13 +1314,14 @@ function installTriggers_() {
 function installTriggers() { resetMemo_(); installTriggers_(); }
 function wantsTg_(p) { const n = p.notify || 'auto'; return !!p.chat_id && (n === 'auto' || n === 'telegram' || n === 'both'); }
 function wantsEmail_(p) { const n = p.notify || 'auto'; if (!p.email || n === 'none' || n === 'telegram') return false; return n === 'email' || n === 'both' || !p.chat_id; }
-/** Sends a message the way the person chose. m = { text, subject?, button?, kind? }. No subject = Telegram only. */
+/** Sends a message the way the person chose. m = { text, subject?, button?, kind? }. No subject = Telegram only.
+ *  Returns how it went out: 'telegram', 'email', 'telegram+email' — or '' when it could not reach them. */
 function notify_(p, m) {
-  if (!p || p.active === 'no' || access_(p) === 'viewer') return false;
-  let sent = false;
-  if (wantsTg_(p)) sent = !!tg_(p.chat_id, m.text).ok;
-  if (m.subject && wantsEmail_(p) && (m.kind !== 'reminder' || S_().email_reminders !== 'no')) sent = mail_(p.email, m.subject, m.text, m.button) || sent;
-  return sent;
+  if (!p || p.active === 'no' || access_(p) === 'viewer') return '';
+  let tg = false, em = false;
+  if (wantsTg_(p)) tg = !!tg_(p.chat_id, m.text).ok;
+  if (m.subject && wantsEmail_(p) && (m.kind !== 'reminder' || S_().email_reminders !== 'no')) em = mail_(p.email, m.subject, m.text, m.button);
+  return tg && em ? 'telegram+email' : tg ? 'telegram' : em ? 'email' : '';
 }
 function notifyLeads_(m, exceptKey) {
   if (typeof m === 'string') m = { text: m };
@@ -1102,9 +1335,10 @@ function mail_(to, subject, text, button) {
   } catch (err) { botLog_('mail', String(err)); return false; }
 }
 function mailInvite_(p, recovery) {
-  const link = linkFor_(p);
-  const text = recovery ? `${S_().greeting || 'Hi'}, ${first_(p)}! Here is your personal ${event_()} Team Hub link again:\n${link}\n\nDon't share it — it's your key.` : inviteText_(p);
-  return mail_(p.email, recovery ? 'Your Team Hub link' : (access_(p) === 'viewer' ? 'Your guest link to our Team Hub' : 'Welcome to the team — your Team Hub link'), text, ['Open the Team Hub', link]);
+  const link = linkFor_(p), acc = account_(p);
+  const text = recovery && !acc ? `${S_().greeting || 'Hi'}, ${first_(p)}! Here is your personal ${event_()} Team Hub link again:\n${link}\n\nDon't share it — it's your key.` : inviteText_(p);
+  const subject = acc ? 'How to sign in to the Team Hub' : recovery ? 'Your Team Hub link' : (access_(p) === 'viewer' ? 'Your guest link to our Team Hub' : 'Welcome to the team — your Team Hub link');
+  return mail_(p.email, subject, text, [acc ? 'Sign in' : 'Open the Team Hub', link]);
 }
 function emailHtml_(title, text, button) {
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -1307,7 +1541,7 @@ function privateMsg_(m, parts, cmd, uid, me, people) {
   }
   if (!me) return; // strangers get nothing
   if (cmd === '/tasks') { tg_(chat, openList_(me) || 'Nothing open. 🎉'); return; }
-  if (cmd === '/hub') { tg_(chat, 'Your personal Team Hub (only yours — don\'t share):\n' + linkFor_(me)); return; }
+  if (cmd === '/hub') { tg_(chat, (account_(me) ? `Your Team Hub (sign in as "${account_(me).username}"):\n` : 'Your personal Team Hub (only yours — don\'t share):\n') + linkFor_(me)); return; }
   if (cmd === '/progress') { tg_(chat, isLead_(me) ? progressText_() : summaryText_().text); return; }
   if (cmd === '/team' || cmd === '/status') { tg_(chat, summaryText_().text); return; }
   tg_(chat, 'I only send reminders. Report in your Team Hub (Start / Done / Blocked). /tasks · /hub · /team');

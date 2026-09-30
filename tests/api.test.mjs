@@ -331,3 +331,81 @@ test('unknown actions and GET on write actions are refused', () => {
   assert.equal(h.get(h.admin, { action: 'task.add' }).error, 'Use POST.');
   assert.equal(h.get(h.admin, { action: 'constructor' }).ok, false);
 });
+
+test('change alerts: owners hear about new dates, removals and moves; admins get one summary; the switch off = silence', () => {
+  const h = setupHub({ starter: false });
+  const a = h.addPerson({ name: 'Ann', email: 'ann@example.com' }), b = h.addPerson({ name: 'Ben', email: 'ben@example.com' });
+  const mailsTo = (to, from) => h.gas._mails.slice(from).filter(m => m.to === to);
+  const t = h.as(h.admin, { action: 'task.add', task: { title: 'Posters', owner: a.key, due: '2026-10-14 20:00' } }).task;
+  assert.ok(mailsTo('ann@example.com', 0).some(m => /New task: Posters/.test(m.subject)), 'no Telegram → email');
+
+  let n = h.gas._mails.length;
+  assert.equal(h.as(h.admin, { action: 'task.edit', task: { id: t.id, due: '2026-10-16 18:00' } }).ok, true);
+  const ann = mailsTo('ann@example.com', n);
+  assert.equal(ann.length, 1); assert.match(ann[0].subject, /New date: Posters/);
+  assert.match(ann[0].body, /now Fri 16 Oct 18:00 \(was Wed 14 Oct 20:00\)/);
+  const rc = mailsTo('ada@example.com', n);
+  assert.equal(rc.length, 1, 'the admin gets one summary'); assert.match(rc[0].body, /Task changes by you/); assert.match(rc[0].body, /Ann — told by email/);
+
+  n = h.gas._mails.length;
+  h.as(h.admin, { action: 'task.edit', task: { id: t.id, title: 'Posters', due: '2026-10-16 18:00' } });
+  assert.equal(h.gas._mails.length, n, 'nothing changed → nothing sent');
+  h.as(h.admin, { action: 'task.edit', task: { id: t.id, due: '2026-10-17 18:00' }, notify: false });
+  assert.equal(h.gas._mails.length, n, '"Tell people" off → silent');
+
+  h.as(h.admin, { action: 'task.bulk', ids: [t.id], op: 'reassign', owner: b.key });
+  assert.ok(mailsTo('ann@example.com', n).some(m => /moved to Ben/.test(m.body)), 'the old owner is told');
+  assert.ok(mailsTo('ben@example.com', n).some(m => /was Ann's/.test(m.body)), 'the new owner is told');
+
+  n = h.gas._mails.length;
+  h.as(h.admin, { action: 'task.delete', ids: [t.id] });
+  assert.ok(mailsTo('ben@example.com', n).some(m => /Posters — removed/.test(m.body)));
+
+  const more = ['Call school', 'Print flyers', 'Book room'].map((title, i) => h.as(h.admin, { action: 'task.add', task: { title, owner: b.key, due: `2026-10-2${i} 18:00` } }).task);
+  n = h.gas._mails.length;
+  h.as(b, { action: 'status', id: more[0].id, status: 'In progress' });
+  assert.equal(mailsTo('ben@example.com', n).length, 0, 'your own status change is not an alert');
+  h.as(h.admin, { action: 'task.bulk', ids: more.map(x => x.id), op: 'shift', days: 2 });
+  const shifted = mailsTo('ben@example.com', n);
+  assert.equal(shifted.length, 1, 'one message for the whole bulk change'); assert.equal((shifted[0].body.match(/📅/g) || []).length, 3);
+
+  h.as(h.admin, { action: 'settings.save', values: { change_alerts: 'no' } });
+  n = h.gas._mails.length;
+  h.as(h.admin, { action: 'task.bulk', ids: [more[1].id], op: 'status', status: 'Dropped' });
+  assert.equal(h.gas._mails.length, n, 'setting off → no alerts');
+});
+
+test('update the whole plan: dry run changes nothing, apply keeps status + proof, drops missing open tasks (never done ones), renumbers by date', () => {
+  const h = setupHub({ starter: false });
+  const a = h.addPerson({ name: 'Ann', email: 'ann@example.com' }), b = h.addPerson({ name: 'Ben', email: 'ben@example.com' });
+  const add = (title, owner, due) => h.as(h.admin, { action: 'task.add', task: { title, owner, due } }).task;
+  const late = add('Late thing', a.key, '2026-10-20 18:00'), early = add('Early thing', a.key, '2026-10-05 18:00');
+  const done = add('Done thing', b.key, '2026-10-01 18:00'), old = add('Old idea', b.key, '2026-10-10 18:00');
+  h.as(b, { action: 'status', id: done.id, status: 'Done', proof: 'Photo: https://example.com/p.jpg' });
+  const rows = [
+    { id: late.id, title: 'Late thing', owner: 'ann', due: '2026-10-21 18:00' },
+    { id: early.id.toLowerCase(), title: 'Early thing, renamed', owner: 'Ben', due: '2026-10-05 18:00' },
+    { title: 'Brand new', owner: 'Ann', due: '2026-10-03 12:00', steps: ['One', 'Two'] },
+  ];
+  let n = h.gas._mails.length;
+  const dry = h.as(h.admin, { action: 'task.sync', rows, dryRun: true, dropMissing: true, renumber: true });
+  assert.equal(dry.ok, true, dry.error);
+  assert.deepEqual([dry.added, dry.updated, dry.dropped], [1, 2, 1]);
+  assert.ok(dry.changes.some(c => c.who === 'Ben' && /Old idea — dropped/.test(c.text)));
+  assert.equal(h.gas._mails.length, n, 'a dry run sends nothing');
+  assert.equal(h.get(h.admin, { action: 'me' }).all.find(t => t.id === old.id).status, 'Not started', 'a dry run changes nothing');
+  assert.equal(h.as(h.admin, { action: 'task.sync', rows: [{ id: 'T999', title: 'x', owner: 'ann', due: '2026-10-01' }] }).ok, false);
+  assert.equal(h.as(a, { action: 'task.sync', rows }).code, 'forbidden', 'admins only');
+
+  const res = h.as(h.admin, { action: 'task.sync', rows, dropMissing: true, renumber: true });
+  assert.equal(res.ok, true, res.error);
+  const by = Object.fromEntries(h.get(h.admin, { action: 'me' }).all.map(t => [t.title, t]));
+  assert.deepEqual(['Done thing', 'Brand new', 'Early thing, renamed', 'Late thing', 'Old idea'].map(x => by[x].id), ['T001', 'T002', 'T003', 'T004', 'T005'], 'numbers follow the dates; dropped last');
+  assert.equal(by['Done thing'].status, 'Done'); assert.match(by['Done thing'].proof, /p\.jpg/, 'status + proof kept');
+  assert.equal(by['Early thing, renamed'].owner, b.key); assert.equal(by['Late thing'].due, '2026-10-21 18:00');
+  assert.equal(by['Old idea'].status, 'Dropped'); assert.deepEqual(by['Brand new'].steps, ['One', 'Two']);
+  assert.equal(res.renumbered[old.id], 'T005');
+  const ann = h.gas._mails.slice(n).filter(m => m.to === 'ann@example.com');
+  assert.equal(ann.length, 1, 'one message per person'); assert.match(ann[0].subject, /task plan was updated/i);
+  assert.match(ann[0].body, /1 new · 1 removed · 1 new date/); assert.match(ann[0].body, /T002 Brand new/, 'next up uses the new numbers');
+});

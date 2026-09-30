@@ -119,16 +119,20 @@ Join-form answers appear in **Dashboard → Applications**. Accepting someone op
 |---|---|
 | Give someone a task | **All tasks → New task.** Pick one or several people — each gets their own copy and a message |
 | Give the same tasks to a lot of people | **All tasks → Import CSV.** Download the template, fill it in, press **Check**, then **Import** |
-| Move deadlines or hand tasks over | **All tasks** → tick the tasks → **Shift days** / **Reassign to…** in the bar at the bottom |
+| Move deadlines or hand tasks over | **All tasks** → tick the tasks → **Shift days** / **Reassign to…** in the bar at the bottom. Everyone affected gets a message (switch off **Tell people** for silent fixes) |
+| Rework the whole plan | **All tasks → Export CSV**, edit it in Sheets/Excel (keep the `id` column; empty id = new task), then **Import CSV → Update the whole plan → Check → Apply**. You see every change per person first; you can drop tasks missing from the file and renumber everything by date. Each person gets one message |
 | See what's stuck | **Overview → Needs attention** (blocked first, then overdue) |
 | Check proof | **Review** → **Approve**, or **Ask for a redo** (they're told what to fix) |
 | Add meetings, team rules, milestones | **Meetings & rules** |
 | Someone leaves | **People → ⋯ → Remove from the team.** Hand their open tasks to their backup in the same step |
 | A link was shared by mistake | **People → ⋯ → Reset link.** The old link stops working immediately |
+| Someone forgot their password (own server) | **People → ⋯ → Reset sign-in.** Their password is removed and you get a new link to send; with it they make a new password |
 | Someone lost their link | They use **Organizer sign-in → Email me my link**, or you use **People → ⋯ → Get link** |
 | Get the volunteer-hours list for HQ | **People → Volunteer hours (CSV)** |
 | Back up everything | **Settings → Export all data**, or just open the Sheet |
 | I lost my admin link | Open your Sheet → menu **Haven Hub → Show admin links** |
+
+**Task-change messages.** When a task is added, deleted, dropped, moved to someone else, gets a new date or new wording, its owner hears about it (Telegram, or email when Telegram isn't connected) and every admin gets one short summary saying who was told how — or who couldn't be reached. On your own server, quick edits are bundled: the messages go out once nobody has edited for a minute. Switch it off in **Settings → Reminders → Tell people when their tasks change**, or per change with the **Tell people** switch.
 
 The golden rule for leads: **never take a task back yourself.** Help the owner, or reassign it to their backup.
 
@@ -212,9 +216,11 @@ No domain yet? `QUICK_TUNNEL=1` gives a temporary `https://….trycloudflare.com
 | `hubctl logs` / `hubctl logs tunnel` | What happened |
 | `hubctl deploy` | Update to the newest version (git pull, then restart — about 2 s) |
 | `hubctl admin-links` | Lost your admin link |
-| `hubctl reset-link KEY` | A personal link leaked |
+| `hubctl reset-link KEY` | A personal link leaked, or someone (you too) forgot their password: prints a fresh link |
 | `hubctl backup` | Take a backup now |
 | `hubctl set-webhook` | Point the Telegram bot at the server again |
+
+**Username + password sign-in (own server only).** Organizers open their personal link once, then **Profile → Make your password**. From then on they sign in at the hub with their username (or email) and password — the browser can save it — and **their personal links stop working**; messages link to the sign-in page instead. Passwords are stored only as scrypt hashes in the server's database (never in the tabs or exports); 5 wrong tries lock an account for 15 minutes. Forgot it? An admin uses **People → ⋯ → Reset sign-in**.
 
 **Backups:**
 - **Nightly:** `~/haven/backups/hub-YYYY-MM-DD.db` (the last 14 are kept), plus the proof files.

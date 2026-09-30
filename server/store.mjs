@@ -15,6 +15,10 @@ export function openStore(file) {
     CREATE TABLE IF NOT EXISTS outbox  (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, payload TEXT NOT NULL,
                                         attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL, sent_at INTEGER, error TEXT, created INTEGER NOT NULL);
     CREATE INDEX IF NOT EXISTS outbox_due ON outbox (sent_at, next_at);
+    CREATE TABLE IF NOT EXISTS accounts (key TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE COLLATE NOCASE, hash TEXT NOT NULL, retired TEXT NOT NULL DEFAULT '',
+                                         fails INTEGER NOT NULL DEFAULT 0, locked_until INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL, updated INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, key TEXT NOT NULL, created INTEGER NOT NULL, last_used INTEGER NOT NULL, expires INTEGER NOT NULL);
+    CREATE INDEX IF NOT EXISTS sessions_key ON sessions (key);
   `);
   const q = sql => db.prepare(sql);
   const S = {
@@ -49,6 +53,21 @@ export function openStore(file) {
       mails24h: q("SELECT COUNT(*) n FROM outbox WHERE kind = 'mail' AND created > ?").get(Date.now() - 864e5).n,
     }),
     pruneOutbox: () => q('DELETE FROM outbox WHERE sent_at IS NOT NULL AND created < ?').run(Date.now() - 30 * 864e5),
+    // password accounts (hashes only) + sign-in sessions (sha256 of the session id only) — never in the tabs or the exports
+    getAccount: key => q('SELECT * FROM accounts WHERE key = ?').get(key),
+    accountByName: name => q('SELECT * FROM accounts WHERE username = ?').get(String(name)),
+    accountByRetired: hash => q("SELECT * FROM accounts WHERE (',' || retired || ',') LIKE ?").get('%,' + hash + ',%'),
+    saveAccount: a => q(`INSERT INTO accounts (key, username, hash, retired, fails, locked_until, created, updated) VALUES (?, ?, ?, ?, 0, 0, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET username = excluded.username, hash = excluded.hash, retired = excluded.retired, fails = 0, locked_until = 0, updated = excluded.updated`)
+      .run(a.key, a.username, a.hash, a.retired || '', a.created || Date.now(), Date.now()),
+    setAccountFails: (key, fails, lockedUntil) => q('UPDATE accounts SET fails = ?, locked_until = ? WHERE key = ?').run(fails, lockedUntil, key),
+    dropAccount: key => { q('DELETE FROM accounts WHERE key = ?').run(key); q('DELETE FROM sessions WHERE key = ?').run(key); },
+    addSession: (id, key, now, expires) => q('INSERT INTO sessions (id, key, created, last_used, expires) VALUES (?, ?, ?, ?, ?)').run(id, key, now, now, expires),
+    getSession: id => q('SELECT * FROM sessions WHERE id = ?').get(id),
+    touchSession: (id, now, expires) => q('UPDATE sessions SET last_used = ?, expires = ? WHERE id = ?').run(now, expires, id),
+    dropSession: id => q('DELETE FROM sessions WHERE id = ?').run(id),
+    dropSessions: (key, exceptId) => q('DELETE FROM sessions WHERE key = ? AND id != ?').run(key, exceptId || ''),
+    pruneSessions: () => q('DELETE FROM sessions WHERE expires < ?').run(Date.now()),
     tx(fn) {
       db.exec('BEGIN IMMEDIATE');
       try { const r = fn(); db.exec('COMMIT'); return r; } catch (e) { try { db.exec('ROLLBACK'); } catch (e2) { /* already rolled back */ } throw e; }

@@ -12,5 +12,5 @@ window.HUB_CONFIG = {
     tashkent: 'https://haven-hub.tailaae5e0.ts.net/api',
   },
   // The newest backend (Code.gs) version. Admins running an older one see an "update available" banner.
-  latestBackend: '4.1.1',
+  latestBackend: '4.2.0',
 };

@@ -18,6 +18,7 @@ export function settings(ctx) {
     ${form('s-rem', 'Reminders', `Every day at the hour below (${esc(S.timezone)}), people get what's due tomorrow + anything overdue.`, `
       ${field({ label: 'Reminder hour', name: 'reminder_hour', type: 'select', value: S.reminder_hour, options: Array.from({ length: 24 }, (_, h) => [String(h), String(h).padStart(2, '0') + ':00']) })}
       ${field({ label: 'Email reminders', name: 'email_reminders', type: 'toggle', value: S.email_reminders, hint: 'For people who haven\'t connected Telegram (and have an email). Free Gmail sends up to 100 emails a day.' })}
+      ${field({ label: 'Tell people when their tasks change', name: 'change_alerts', type: 'toggle', value: S.change_alerts, hint: 'A new task, a new date, a new owner or a removed task: the person gets a message (Telegram, or email) and admins a short summary. Quick edits are bundled into one message.' })}
       ${field({ label: 'Weekly report', name: 'weekly_report', type: 'toggle', value: S.weekly_report, hint: 'Sunday 19:00 to leads (+ a short post in the Telegram group).' })}
       ${field({ label: 'Tell leads about every finished task', name: 'done_alerts', type: 'toggle', value: S.done_alerts, hint: 'Telegram DM with the proof photos.' })}
       ${field({ label: 'Post finished tasks in the Telegram group', name: 'group_done_posts', type: 'toggle', value: S.group_done_posts })}`,

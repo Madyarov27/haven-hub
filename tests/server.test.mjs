@@ -207,3 +207,78 @@ test('website on GitHub Pages, server does the work: CORS for the site only, lin
   assert.equal(moved.code, 'moved'); assert.equal(moved.url, SITE + '/?hub=tashkent');
   await s.stop();
 });
+
+test('change alerts on the server wait until the edits stop, then go out as one message per person', async () => {
+  const s = await boot(); const admin = await setUp(s);
+  const p = await s.post(Object.assign({ action: 'person.add', person: { name: 'Bob', email: 'bob@example.com' } }, admin));
+  const t = (await s.post(Object.assign({ action: 'task.add', task: { title: 'Posters', owner: p.person.key, due: '2026-10-14 20:00' } }, admin))).task;
+  await s.post(Object.assign({ action: 'task.edit', task: { id: t.id, due: '2026-10-15 20:00' } }, admin));
+  await s.post(Object.assign({ action: 'task.edit', task: { id: t.id, due: '2026-10-16 18:00' } }, admin));
+  const at = new Date('2026-10-05T09:00:00Z'); // 14:00 in Tashkent: no reminders
+  await s.hub.tick(at); await s.hub.drainNow();
+  assert.equal(s.mails.filter(m => m.to === 'bob@example.com').length, 0, 'still inside the quiet minute');
+  const q = JSON.parse(s.hub.store.getProp('PENDING_CHANGES'));
+  assert.equal(q.length, 3);
+  s.hub.store.setProp('PENDING_CHANGES', JSON.stringify(q.map(x => Object.assign(x, { at: x.at - 120e3 })))); // a minute and more passed
+  await s.hub.tick(at); await s.hub.drainNow();
+  const bob = s.mails.filter(m => m.to === 'bob@example.com');
+  assert.equal(bob.length, 1, 'one message for the whole burst');
+  assert.match(bob[0].text, /Posters — due Fri 16 Oct 18:00/);
+  assert.equal(s.hub.store.getProp('PENDING_CHANGES'), null, 'queue emptied');
+  assert.ok(s.mails.some(m => m.to === 'ada@example.com' && /Task changes by you/.test(m.text)), 'the admin summary');
+  await s.stop();
+});
+
+test('password sign-in: made from a link (the link then stops working), sessions, lockout, reset by an admin', async () => {
+  const s = await boot(); const admin = await setUp(s);
+  const p = await s.post(Object.assign({ action: 'person.add', person: { name: 'Bob', email: 'bob@example.com' } }, admin));
+  const bob = { u: p.person.key, t: new URL(p.link).searchParams.get('t') };
+  const create = (extra, who = bob) => s.post(Object.assign({ action: 'account.create' }, who, extra));
+  assert.match((await create({ username: 'bob', password: 'short' })).error, /8 characters/);
+  assert.match((await create({ username: 'Bob!', password: 'a good long one' })).error, /Username/);
+  assert.match((await create({ username: 'bobby', password: 'bobby rocks 1' })).error, /username in your password/);
+  assert.equal((await create({ username: 'bob', password: 'a good long one' }, { t: 'x'.repeat(32) })).code, 'auth');
+  assert.equal((await s.get(Object.assign({ action: 'account.create', username: 'bob', password: 'a good long one' }, bob))).ok, false, 'POST only');
+  const made = await create({ username: 'Bob.K', password: 'purple otter 42' });
+  assert.equal(made.ok, true, made.error); assert.match(made.t, /^hs_/); assert.equal(made.username, 'bob.k');
+  assert.equal((await create({ username: 'bob2', password: 'purple otter 42' }, { t: made.t })).ok, false, 'one account per person');
+
+  const old = await s.get(Object.assign({ action: 'me' }, bob));
+  assert.equal(old.code, 'auth'); assert.equal(old.reason, 'password'); assert.equal(old.username, 'bob.k', 'the old link says: use your password');
+  const me = await s.get({ action: 'me', u: made.u, t: made.t });
+  assert.equal(me.ok, true, me.error); assert.equal(me.me.account.username, 'bob.k'); assert.equal(me.accounts, true);
+  assert.equal((await s.get({ action: 'me', t: me.me.tg_start })).reason, 'password', 'the new secret is no link either');
+  s.hub.be.call('resetMemo_');
+  const link = s.hub.be.call('linkFor_', s.hub.be.call('findPerson_', bob.u));
+  assert.equal(link, PUB + '/#/signin', 'messages carry no key any more');
+  const ppl = (await s.get(Object.assign({ action: 'me' }, admin))).people;
+  assert.equal(ppl.find(x => x.key === bob.u).password, true);
+  assert.equal((await s.post(Object.assign({ action: 'person.link', key: bob.u }, admin))).code, 'password');
+
+  assert.equal((await s.post({ action: 'login', username: 'bob.k', password: 'nope nope' })).error, 'Wrong username or password.');
+  assert.equal((await s.post({ action: 'login', username: 'nobody', password: 'nope nope' })).error, 'Wrong username or password.');
+  const li = await s.post({ action: 'login', username: 'BOB.K', password: 'purple otter 42' });
+  assert.equal(li.ok, true, li.error); assert.equal(li.u, bob.u);
+  assert.equal((await s.post({ action: 'login', username: 'bob@example.com', password: 'purple otter 42' })).ok, true, 'the email works as a username');
+  const t = (await s.post(Object.assign({ action: 'task.add', task: { title: 'Posters', owner: bob.u, due: '2026-10-20' } }, admin))).task;
+  assert.equal((await s.post({ action: 'status', id: t.id, status: 'In progress', u: li.u, t: li.t })).ok, true, 'a session can do everything the link could');
+
+  const row = s.hub.store.getAccount(bob.u);
+  assert.match(row.hash, /^scrypt\$15\$8\$1\$[\w-]{22}\$[\w-]{43}$/); assert.ok(!JSON.stringify(row).includes('purple'), 'only the hash is stored');
+  assert.ok(!JSON.stringify(await s.hub.admin.export()).includes('scrypt'), 'hashes are not in exports');
+
+  assert.equal((await s.post({ action: 'account.password', t: li.t, current: 'wrong one', password: 'green heron 77' })).ok, false);
+  assert.equal((await s.post({ action: 'account.password', t: li.t, current: 'purple otter 42', password: 'green heron 77' })).ok, true);
+  assert.equal((await s.get({ action: 'me', t: made.t })).reason, 'session', 'other devices are signed out');
+  assert.equal((await s.get({ action: 'me', t: li.t })).ok, true, 'this device stays signed in');
+
+  for (let i = 0; i < 5; i++) await s.post({ action: 'login', username: 'bob.k', password: 'wrong wrong ' + i });
+  assert.match((await s.post({ action: 'login', username: 'bob.k', password: 'green heron 77' })).error, /Too many wrong passwords/, 'locked after 5');
+
+  const reset = await s.post(Object.assign({ action: 'person.resetLink', key: bob.u }, admin));
+  assert.equal(reset.ok, true, reset.error); assert.match(reset.link, /t=[0-9a-f]{32}$/);
+  assert.equal((await s.get({ action: 'me', t: li.t })).code, 'auth', 'sessions end');
+  assert.equal(s.hub.store.getAccount(bob.u), undefined, 'the password is gone');
+  assert.equal((await s.get({ action: 'me', u: bob.u, t: new URL(reset.link).searchParams.get('t') })).ok, true, 'the fresh link works');
+  await s.stop();
+});

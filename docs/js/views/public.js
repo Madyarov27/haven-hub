@@ -96,14 +96,32 @@ function notReady(root) {
 export function signin(root, ctx, opts = {}) {
   clearInterval(timer);
   document.title = 'Sign in — Haven Hub';
+  const pw = ctx.api.hub() && ctx.api.isServerHub();
   root.innerHTML = `<div class="wiz" style="max-width:520px"><div class="wiz-top"><a href="#/"><img src="assets/logo-orange.png" alt="Hack Club Haven" width="96" height="61"></a><h1 style="font-size:26px">Organizer sign-in</h1></div>
-    ${opts.error ? `<div class="banner bad">${icon('alert')}<div>${esc(opts.error)}</div></div>` : ''}
+    ${opts.error ? `<div class="banner ${opts.password ? 'info' : 'bad'}">${icon(opts.password ? 'user' : 'alert')}<div>${esc(opts.error)}</div></div>` : ''}
     ${opts.old ? `<div class="banner info">${icon('zap')}<div>This hub is being upgraded. Personal links keep working — open yours again in a few minutes.</div></div>` : ''}
-    <form class="card" id="si1"><h3 style="margin-bottom:6px">Open your personal link</h3><p class="muted small">Your lead sent it by Telegram or email. It contains <code>&amp;t=</code>. Paste it here:</p>
-      <div class="linkbox"><input name="link" placeholder="https://…?hub=…&u=…&t=…" aria-label="Your personal link"><button class="btn primary" type="submit">Open</button></div></form>
-    ${ctx.api.hub() ? `<form class="card" id="si2"><h3 style="margin-bottom:6px">Lost it? Email me my link</h3><p class="muted small">Works if your email is saved on the team.</p>
+    ${pw ? `<form class="card" id="si0" method="post" action="#"><h3 style="margin-bottom:10px">Sign in</h3>
+      <div class="field"><label for="si-u">Username or email</label><input id="si-u" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required value="${esc(opts.username || '')}"></div>
+      <div class="field"><label for="si-p">Password</label><input id="si-p" name="password" type="password" autocomplete="current-password" required></div>
+      <button class="btn primary" type="submit">${icon('user')} Sign in</button>
+      <p class="small muted" style="margin:10px 0 0">First time? Open the personal link your lead sent you, then make your password in <b>Profile</b>. Forgot your password? Ask your lead to reset your sign-in.</p></form>` : ''}
+    <form class="card" id="si1"><h3 style="margin-bottom:6px">${pw ? 'First time: open your personal link' : 'Open your personal link'}</h3><p class="muted small">Your lead sent it by Telegram or email. It contains <code>&amp;t=</code>. Paste it here:</p>
+      <div class="linkbox"><input name="link" placeholder="https://…?hub=…&u=…&t=…" aria-label="Your personal link"><button class="btn ${pw ? 'soft' : 'primary'}" type="submit">Open</button></div></form>
+    ${ctx.api.hub() ? `<form class="card" id="si2"><h3 style="margin-bottom:6px">Lost your link? Email me how to sign in</h3><p class="muted small">Works if your email is saved on the team.</p>
       <div class="linkbox"><input name="email" type="email" required placeholder="you@example.com" aria-label="Your email"><button class="btn soft" type="submit">Send</button></div><p class="small" id="si2o" style="margin:8px 0 0"></p></form>` : ''}
     <p class="small muted" style="text-align:center">${ctx.api.hub() ? '<a href="#/">← Back to the event page</a>' : '<a href="#/">← Haven Hub home</a>'}</p></div>`;
+  const f0 = $('#si0');
+  if (f0) {
+    if (opts.username) setTimeout(() => f0.password.focus(), 50);
+    f0.onsubmit = async e => {
+      e.preventDefault();
+      const b = f0.querySelector('[type=submit]'); busy(b, true, 'Signing in…');
+      const r = await ctx.api.postPublic('login', { username: f0.username.value.trim(), password: f0.password.value });
+      if (!r.ok) { busy(b, false); f0.password.value = ''; f0.password.focus(); return toast(r.error || 'Could not sign in.', 'err'); }
+      ctx.api.setSession({ u: r.u, t: r.t });
+      location.hash = '#/'; location.reload();
+    };
+  }
   $('#si1').onsubmit = e => {
     e.preventDefault();
     const p = parseLink(e.target.link.value);

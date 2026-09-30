@@ -1,6 +1,6 @@
 /* Haven Hub — boot, routing and the app shell (sidebar + top bar). */
 import * as api from './api.js';
-import { $, $$, esc, icon, toast, avatar, first, layerOpen, daysTo, skeleton } from './ui.js';
+import { $, $$, esc, icon, toast, avatar, first, layerOpen, daysTo, skeleton, store } from './ui.js';
 import { landing } from './views/landing.js';
 import { setup } from './views/setup.js';
 import { publicPage, signin } from './views/public.js';
@@ -76,7 +76,7 @@ async function load(opts = {}) {
   if (!api.session()) return render();
   const D = await api.get('me', { hub: api.hub() });
   if (!D.ok) {
-    if (D.code === 'auth') { api.signOut(); ctx.D = null; return signin(root, ctx, { error: D.error }); }
+    if (D.code === 'auth') { api.signOut(); ctx.D = null; return signin(root, ctx, { error: D.error, username: D.username, password: D.reason === 'password' || D.reason === 'session' }); }
     if (ctx.D) { if (!opts.silent) toast(D.error, 'err'); return; }
     return fatal(D.error, D.code);
   }
@@ -88,8 +88,9 @@ async function load(opts = {}) {
 function fatal(msg, code) {
   root.innerHTML = `<div class="wiz"><div class="card"><h2>Can't open the Team Hub</h2><p class="muted">${esc(msg)}</p>
     ${code === 'network' ? '<p class="small muted">If this keeps happening, the hub\'s owner should check that the web app is deployed with access <b>Anyone</b>.</p>' : ''}
-    <div class="row"><button class="btn primary" id="retry">${icon('refresh')} Try again</button><a class="btn ghost" href="#/signin">Use a different link</a></div></div></div>`;
+    <div class="row"><button class="btn primary" id="retry">${icon('refresh')} Try again</button><button class="btn ghost" id="other">Sign in differently</button></div></div></div>`;
   $('#retry').onclick = () => location.reload();
+  $('#other').onclick = () => { api.signOut(); ctx.D = null; location.hash = '#/signin'; render(); };
 }
 function outdated() {
   root.innerHTML = `<div class="wiz"><div class="card"><h2>This hub needs an update</h2>
@@ -104,7 +105,7 @@ function render() {
   if (r === 'setup') return setup(root, ctx);
   if (!api.hub()) return landing(root, ctx);
   if (!api.session()) return r === 'signin' ? signin(root, ctx) : publicPage(root, ctx, { join: r === 'join' });
-  if (r === 'signin') return signin(root, ctx);
+  if (r === 'signin') { history.replaceState(null, '', location.pathname + location.search + '#/'); return render(); } // already signed in: messages link here
   if (!ctx.D) {
     root.innerHTML = `<div class="app"><aside class="side"></aside><div class="main"><div class="top"><h1>Loading…</h1></div><div class="content">${skeleton(4)}</div></div></div>`;
     if (!loading) { loading = true; load().finally(() => { loading = false; }); }
@@ -135,6 +136,8 @@ function shell(item) {
   const banners = [];
   if (r === 'admin' && CFG.latestBackend && vcmp(D.version, CFG.latestBackend) < 0) banners.push(`<div class="banner info">${icon('zap')}<div>Backend update available: you run v${esc(D.version)}, the latest is v${esc(CFG.latestBackend)}. <a href="${esc(CFG.repo)}/blob/main/setup.md#updating" target="_blank" rel="noopener">How to update (2 min)</a></div></div>`);
   if (r === 'admin' && D.settings && (!D.settings.hub_id || /^Haven$/i.test(D.settings.event_name || ''))) banners.push(`<div class="banner">${icon('alert')}<div>Finish your setup: give the event its name and check the dates in <a href="#/admin/settings">Settings</a>.</div></div>`);
+  if (D.accounts && !D.me.account && r !== 'viewer' && !api.passwordSession() && !(route() === 'profile') && Number(store.get('hh:nudge:' + api.hub()) || 0) < Date.now())
+    banners.push(`<div class="banner info" id="nudge">${icon('user')}<div><b>Make your password</b> — then you can sign in on any phone or computer with a username and password. <a href="#/profile">Make it now</a> <button class="linkbtn" id="nudge-x">later</button></div></div>`);
   if (api.DEMO) banners.push(`<div class="banner info">${icon('eye')}<div>Demo mode — made-up data, nothing is saved. Try <a href="?demo=1&as=admin">admin</a> · <a href="?demo=1&as=lead">lead</a> · <a href="?demo=1&as=member">member</a> · <a href="?demo=1&as=viewer">guest viewer</a> · <a href="?demo=1&as=guest">public page</a> · <a href="?demo=fresh#/setup">setup</a></div></div>`);
   root.innerHTML = `<div class="app" id="app">
     <aside class="side" aria-label="Main navigation">
@@ -155,6 +158,7 @@ function shell(item) {
   $('#burger').onclick = () => $('#app').classList.toggle('nav-open');
   $('#app').addEventListener('click', e => { if (e.target === $('#app') && $('#app').classList.contains('nav-open')) closeNav(); });
   $('#signout').onclick = signOut;
+  const nx = $('#nudge-x'); if (nx) nx.onclick = () => { store.set('hh:nudge:' + api.hub(), String(Date.now() + 3 * 864e5)); $('#nudge').remove(); };
   $('#usermenu').onclick = e => { e.stopPropagation(); userMenu(e.currentTarget); };
 }
 function closeNav() { const a = $('#app'); if (a) a.classList.remove('nav-open'); }
@@ -172,8 +176,9 @@ function userMenu(btn) {
   m.onclick = e => { const b = e.target.closest('[data-m]'); if (!b) return; m.remove(); if (b.dataset.m === 'out') signOut(); if (b.dataset.m === 'refresh') load({ silent: false }).then(() => toast('Up to date.')); };
 }
 function signOut() {
+  const pw = api.passwordSession();
   api.signOut(); ctx.D = null;
-  toast('Signed out. Your personal link still works — open it again to come back.');
+  toast(pw ? 'Signed out.' : 'Signed out. Your personal link still works — open it again to come back.');
   location.hash = '#/'; render();
 }
 // redraw after a drawer closes if fresh data arrived meanwhile

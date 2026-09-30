@@ -8,6 +8,7 @@ import { gzipSync } from 'node:zlib';
 import { openStore } from './store.mjs';
 import { createRuntime } from './runtime.mjs';
 import { createTelegram, createMailer, drainOutbox } from './outbox.mjs';
+import { createAccounts, SESSION_RE, usernameProblem, passwordProblem } from './accounts.mjs';
 import { loadBackend } from '../dev/gas-fakes.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -29,6 +30,7 @@ export async function createHub(opts = {}) {
   const telegram = createTelegram({ fetchImpl: opts.fetch || fetch, env, log });
   const mailer = createMailer({ env, transport: opts.mailTransport });
   const runtime = createRuntime({ store, filesDir, env, telegram });
+  const accounts = createAccounts({ store });
   const started = Date.now();
   // the website may live elsewhere (e.g. GitHub Pages) and call this server's /api — allow those origins
   const origins = String(env.ALLOWED_ORIGINS || 'https://notazizelse.github.io').split(/[\s,]+/).filter(Boolean);
@@ -40,9 +42,12 @@ export async function createHub(opts = {}) {
     webhookUrl: () => telegram.webhookUrl(),
     setWebhook: () => { pendingWebhook = true; },
     checkSetupCode: c => { const ok = same(c, store.getMeta('setup_code')) && Number(store.getMeta('setup_code_exp', 0)) > Date.now(); if (ok) store.delMeta('setup_code'); return ok; },
+    account: key => accounts.info(key),   // password sign-in (Code.gs: account_, dropAccount_)
+    dropAccount: key => accounts.drop(key),
     stats: () => ({ uptimeMin: Math.round((Date.now() - started) / 6e4), outbox: store.outboxStats(), lastBackup: store.getMeta('last_backup', ''), publicUrl: env.publicUrl(), email: mailer.configured() }),
   };
   let pendingWebhook = false;
+  const buckets = new Map(); // rate limits: what+ip → { n, t }
   const code = opts.code || readFileSync(join(ROOT, 'apps-script', 'Code.gs'), 'utf8');
   const be = loadBackend(code, runtime.gas, { HUB_SERVER: hubServer });
 
@@ -65,12 +70,79 @@ export async function createHub(opts = {}) {
     'tg.setToken': async b => { if (b.token) await telegram.refresh(String(b.token).trim()).catch(() => {}); },
     botinfo: async () => telegram.refresh(store.getProp('BOT_TOKEN')).catch(() => {}),
   };
-  async function api(method, params) {
+  async function api(method, params, ip = '') {
+    if (ACCOUNT[params.action]) return method === 'POST' ? ACCOUNT[params.action](params, ip) : { ok: false, error: 'Use POST.' };
     if (PRE[params.action]) await PRE[params.action](params);
-    const out = await run(() => method === 'GET' ? be.get(params) : be.post(params));
+    const out = await run(() => { const no = signedIn(params); return no || (method === 'GET' ? be.get(params) : be.post(params)); });
     if (params.action === 'tg.setToken' && out.ok) pendingWebhook = true;
     return out;
   }
+
+  // ------------------------------------------------------------------ password sign-in (server only; see accounts.mjs)
+  const signedOut = { ok: false, code: 'auth', reason: 'session', error: 'You were signed out. Sign in again.' };
+  const useYourPassword = username => ({ ok: false, code: 'auth', reason: 'password', username, error: 'You sign in with your password now — your old link was switched off.' });
+  const person = (fn, arg) => { be.call('resetMemo_'); const p = be.call(fn, arg); return p && p.active !== 'no' ? p : null; };
+  /** Runs inside the request: a session id becomes the person's token for Code.gs; the link of someone who made a password is refused. */
+  function signedIn(params) {
+    const t = String(params.t || '');
+    if (!t) return null;
+    if (SESSION_RE.test(t)) {
+      const key = accounts.session(t), p = key && person('findPerson_', key);
+      if (!p || !p.token || !accounts.info(p.key)) return signedOut;
+      params.t = p.token; params.u = p.key;
+      return null;
+    }
+    const p = person('person_', t), acc = p ? accounts.info(p.key) : accounts.retired(t);
+    return acc ? useYourPassword(acc.username) : null;
+  }
+  const ACCOUNT = {
+    /** From a working personal link: make a username + password. Every old link stops working; this device stays signed in. */
+    async 'account.create'(b) {
+      const username = String(b.username || '').trim().toLowerCase(), password = String(b.password || '');
+      const who = await run(() => {
+        const p = SESSION_RE.test(String(b.t || '')) ? null : person('person_', String(b.t || ''));
+        return p && (!b.u || b.u === p.key) ? { key: p.key, viewer: be.call('access_', p) === 'viewer' } : null;
+      });
+      if (!who) return { ok: false, code: 'auth', error: 'Open your personal link first, then make your account.' };
+      if (who.viewer) return { ok: false, error: "Guest links don't use passwords." };
+      if (accounts.info(who.key)) return { ok: false, error: 'You already have an account — change your password in Profile.' };
+      const bad = usernameProblem(username) || passwordProblem(password, username);
+      if (bad) return { ok: false, error: bad };
+      if (store.accountByName(username)) return { ok: false, error: 'That username is taken — pick another one.' };
+      const save = await accounts.create(who.key, username, password, String(b.t));
+      const err = await run(() => { const e = save(); if (!e) { be.call('resetMemo_'); be.call('rotateToken_', who.key); } return e; });
+      if (err) return { ok: false, error: err };
+      return { ok: true, u: who.key, t: accounts.newSession(who.key), username };
+    },
+    /** Username (or the email in People) + password → a session for this device. */
+    async login(b, ip) {
+      if (limited(ip, 'login', 30, 15 * 60e3)) return { ok: false, error: 'Too many tries from here — wait 15 minutes.' };
+      const name = String(b.username || '').trim().toLowerCase(), password = String(b.password || '');
+      if (!name || !password) return { ok: false, error: 'Write your username and your password.' };
+      let a = store.accountByName(name);
+      if (!a && name.includes('@')) {
+        const key = await run(() => { be.call('resetMemo_'); const p = be.call('activePeople_').find(q => String(q.email || '').toLowerCase() === name); return p ? p.key : ''; });
+        a = key ? store.getAccount(key) : null;
+      }
+      const r = await accounts.login(a, password);
+      if (!r.ok) return r;
+      const p = await run(() => { const x = person('findPerson_', r.key); if (x && x.token) be.call('log_', x.name, '', 'Signed in', 'password'); return x && x.token ? { key: x.key } : null; });
+      if (!p) { accounts.drop(r.key); return { ok: false, error: 'Wrong username or password.' }; }
+      return { ok: true, u: p.key, t: accounts.newSession(p.key) };
+    },
+    /** Signed in: current password + a new one. Every other device is signed out. */
+    async 'account.password'(b) {
+      const key = accounts.session(b.t);
+      if (!key) return signedOut;
+      const err = await accounts.setPassword(key, String(b.current || ''), String(b.password || ''));
+      if (err) return { ok: false, error: err };
+      accounts.endOtherSessions(key, b.t);
+      await run(() => { const x = person('findPerson_', key); if (x) be.call('log_', x.name, '', 'Password changed', ''); });
+      return { ok: true };
+    },
+    async logout(b) { accounts.endSession(b.t); return { ok: true }; },
+    async 'logout.all'(b) { const key = accounts.session(b.t); if (!key) return signedOut; accounts.endOtherSessions(key, ''); return { ok: true }; },
+  };
 
   // ------------------------------------------------------------------ one-time import from a Google Sheet (Haven Hub → Move this hub to my own server…)
   const importOk = c => same(c, store.getMeta('import_code')) && Number(store.getMeta('import_code_exp', 0)) > Date.now();
@@ -138,7 +210,9 @@ export async function createHub(opts = {}) {
       await once('sched_weekly', sunday && hour >= 19 && S.weekly_report !== 'no', () => call('weeklyReport'));
       await once('sched_export', sunday && hour >= 20, () => emailExport());
     }
-    await once('sched_backup', hour >= 3, async () => backup());
+    await once('sched_backup', hour >= 3, async () => { backup(); store.pruneSessions(); });
+    if (ready) await call('flushChanges', false); // task-change alerts wait until nobody edited for a minute
+    const old = Date.now() - 3600e3; buckets.forEach((b, k) => { if (b.t < old) buckets.delete(k); });
     if (Date.now() - lastBotCheck > 60e3 && store.getProp('BOT_TOKEN')) {
       lastBotCheck = Date.now();
       const c = await telegram.refresh(store.getProp('BOT_TOKEN')).catch(() => null);
@@ -191,13 +265,17 @@ export async function createHub(opts = {}) {
   };
 
   // ------------------------------------------------------------------ HTTP
-  const buckets = new Map();
   const limited = (ip, key, max, perMs) => { const k = key + ip, now = Date.now(), b = buckets.get(k) || { n: 0, t: now }; if (now - b.t > perMs) { b.n = 0; b.t = now; } b.n++; buckets.set(k, b); return b.n > max; };
   const readBody = (req, max) => new Promise((ok, bad) => {
     let size = 0; const chunks = [];
     req.on('data', c => { size += c.length; if (size > max) { bad(Object.assign(new Error('Too large'), { status: 413 })); req.destroy(); } else chunks.push(c); });
     req.on('end', () => ok(Buffer.concat(chunks).toString('utf8'))); req.on('error', bad);
   });
+  const clientIp = req => {
+    const sock = String(req.socket.remoteAddress || ''), local = /^(::1|127\.|::ffff:127\.)/.test(sock);
+    const fwd = String(req.headers['cf-connecting-ip'] || String(req.headers['x-forwarded-for'] || '').split(',')[0]).trim();
+    return local && fwd ? fwd : sock;
+  };
   const send = (res, status, body, type = 'application/json; charset=utf-8', extra = {}) => {
     res.writeHead(status, Object.assign({ 'Content-Type': type, 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store' }, extra));
     res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
@@ -206,17 +284,17 @@ export async function createHub(opts = {}) {
   const configJs = () => `// Generated by the Haven Hub server.\nwindow.HUB_CONFIG = ${JSON.stringify({ api: '/api', selfHosted: true, repo: 'https://github.com/notazizelse/haven-hub', latestBackend: be.call('__eval', 'HUB_VERSION'), templateSheet: '' })};\n`;
 
   async function handle(req, res) {
-    const url = new URL(req.url, 'http://x'), path = url.pathname, ip = String(req.headers['cf-connecting-ip'] || req.socket.remoteAddress || '');
+    const url = new URL(req.url, 'http://x'), path = url.pathname, ip = clientIp(req);
     const origin = String(req.headers.origin || '');
     if (path === '/api' && origins.includes(origin)) { res.setHeader('Access-Control-Allow-Origin', origin); res.setHeader('Vary', 'Origin'); }
     try {
       if (path === '/api' && req.method === 'OPTIONS') return send(res, 204, '', 'text/plain', { 'Access-Control-Allow-Methods': 'GET, POST', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Max-Age': '86400' });
       if (path === '/api') {
-        if (req.method === 'GET') return send(res, 200, await api('GET', Object.fromEntries(url.searchParams)));
+        if (req.method === 'GET') return send(res, 200, await api('GET', Object.fromEntries(url.searchParams), ip));
         if (req.method === 'POST') {
           if (limited(ip, 'post', 240, 60e3)) return send(res, 429, { ok: false, error: 'Too many requests — wait a minute.' });
           let b; try { b = JSON.parse(await readBody(req, 12e6)); } catch (e) { return send(res, e.status || 400, { ok: false, error: e.status === 413 ? 'Too large (max ~9 MB).' : 'Bad request' }); }
-          return send(res, 200, await api('POST', b || {}));
+          return send(res, 200, await api('POST', b || {}, ip));
         }
         return send(res, 405, { ok: false, error: 'Use GET or POST' });
       }
@@ -251,6 +329,6 @@ export async function createHub(opts = {}) {
     }
   }
 
-  return { handle, admin, tick, api, webhook, importStart, importFiles, importFinish, backup, store, runtime, be, telegram, env, drain: async () => kick(), drainNow: () => drainOutbox({ store, telegram, mailer, filesDir, log }),
+  return { handle, admin, tick, api, webhook, accounts, importStart, importFiles, importFinish, backup, store, runtime, be, telegram, env, drain: async () => kick(), drainNow: () => drainOutbox({ store, telegram, mailer, filesDir, log }),
     close: () => store.close() };
 }

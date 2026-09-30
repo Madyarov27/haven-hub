@@ -9,8 +9,9 @@
 | Their tasks only: steps, deadline, who to ask | Overview: overdue, blocked, next 7 days, milestones, workload chart | Public event page: countdown, signup link, progress |
 | **Start** · **Done + proof** (photo, file, link) · **I'm blocked** | All-tasks table: search, filters, bulk reassign/shift, CSV import | **Join the team** form → Applications |
 | Reminders by email or Telegram the evening before | Review proof: approve or ask for a redo | Read-only **guest links** for HQ, mentors, sponsors |
-| Calendar, team, rules, profile | People: add organizers, invite by email/Telegram, reset links, remove + reassign | |
-| | Timeline, scorecards, volunteer-hours CSV, settings, Telegram bot | |
+| A message whenever their tasks are added, removed, moved or re-dated | Admins get one summary of every change and who was told how | |
+| Month **calendar**: tasks, meetings, milestones | People: add organizers, invite by email/Telegram, reset links, remove + reassign | |
+| Team, rules, profile · on your own server: **username + password** sign-in | Timeline, scorecards, volunteer-hours CSV, settings, Telegram bot · **Export CSV → edit → Update the whole plan** | |
 
 ## How it works
 

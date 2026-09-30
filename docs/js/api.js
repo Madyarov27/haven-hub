@@ -57,7 +57,16 @@ export const publicUrl = () => siteUrl() + '/' + (SELF || (CFG.defaultHub && hub
 
 export function session() { return DEMO ? demoSession : store.json('hh:s:' + hubId, null); }
 export function setSession(s) { if (DEMO) { demoSession = s; return; } store.set('hh:s:' + hubId, JSON.stringify(s)); store.del('hh:c:' + hubId); }
-export function signOut() { if (DEMO) { demoSession = null; return; } store.del('hh:s:' + hubId); store.del('hh:c:' + hubId); }
+export function signOut() {
+  if (DEMO) { demoSession = null; return; }
+  const s = session();
+  if (s && /^hs_/.test(s.t)) postTo(hubId, 'logout', { t: s.t }); // end a password session on the server too
+  store.del('hh:s:' + hubId); store.del('hh:c:' + hubId);
+}
+/** Hubs on their own server (server/) offer username + password sign-in. */
+export const isServerHub = () => !DEMO && (SELF || Object.prototype.hasOwnProperty.call(SERVERS, hubId));
+/** Signed in with a password (not with a personal link)? */
+export const passwordSession = () => { const s = session(); return !!(s && /^hs_/.test(s.t)); };
 export function forgetHub() { signOut(); store.del('hh:last'); }
 /** Last dashboard payload for this hub + person, shown instantly while fresh data loads. */
 export function cached() { const s = session(), c = !DEMO && store.json('hh:c:' + hubId, null); return c && s && c.me && c.me.key === s.u ? c : null; }
