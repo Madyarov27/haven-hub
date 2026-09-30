@@ -1,1 +1,16 @@
-{ "type": "module", "private": true, "scripts": { "test": "node --test tests/*.test.mjs" } }
+{
+  "name": "haven-hub",
+  "version": "4.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Team hub for Hack Club Haven organizers — runs on Google Apps Script or on your own server",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "start": "node --disable-warning=ExperimentalWarning server/index.mjs",
+    "dev": "python dev/serve.py"
+  },
+  "dependencies": {
+    "nodemailer": "^10.0.13"
+  }
+}

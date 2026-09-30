@@ -3,7 +3,7 @@ import { $, $$, esc, icon, pill, reviewPill, dueInfo, linkify, safeUrl, toast, s
 
 const stCls = s => ({ 'In progress': 'st-ip', Blocked: 'st-bl', Done: 'st-dn', Dropped: 'st-dr' }[s] || '');
 const dur = m => !m ? '' : m < 60 ? `${m} min` : (m % 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m / 60} h`);
-export const fileIds = s => [...String(s || '').matchAll(/drive\.google\.com\/file\/d\/([\w-]+)/g)].map(m => m[1]);
+export const fileIds = s => [...String(s || '').matchAll(/\/file\/d\/([\w-]+)/g)].map(m => m[1]); // Google Drive and self-hosted links alike
 
 export function taskCard(ctx, t, opts = {}) {
   const di = dueInfo(t, ctx.tz), done = t.status === 'Done', mine = t.owner === ctx.me.key;

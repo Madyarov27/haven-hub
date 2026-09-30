@@ -30,7 +30,7 @@ const NAV = [
   { g: 'Me', r: 'profile', t: 'Profile', i: 'user', roles: ALL, v: member.profile },
   { g: 'Manage', r: 'admin/people', t: 'People', i: 'userPlus', roles: ['admin'], v: people },
   { g: 'Manage', r: 'admin/applications', t: 'Applications', i: 'inbox', roles: ['admin'], v: applications, n: D => (D.applications || []).filter(a => a.status === 'new').length },
-  { g: 'Manage', r: 'admin/content', t: 'Meetings & rules', i: 'file', roles: ['admin'], v: content },
+  { g: 'Manage', r: 'admin/content', t: 'Meetings, rules & sponsors', i: 'file', roles: ['admin'], v: content },
   { g: 'Manage', r: 'admin/settings', t: 'Settings', i: 'settings', roles: ['admin'], v: settings },
 ];
 
@@ -88,7 +88,8 @@ async function load(opts = {}) {
 function fatal(msg, code) {
   root.innerHTML = `<div class="wiz"><div class="card"><h2>Can't open the Team Hub</h2><p class="muted">${esc(msg)}</p>
     ${code === 'network' ? '<p class="small muted">If this keeps happening, the hub\'s owner should check that the web app is deployed with access <b>Anyone</b>.</p>' : ''}
-    <div class="row"><button class="btn primary" onclick="location.reload()">${icon('refresh')} Try again</button><a class="btn ghost" href="#/signin">Use a different link</a></div></div></div>`;
+    <div class="row"><button class="btn primary" id="retry">${icon('refresh')} Try again</button><a class="btn ghost" href="#/signin">Use a different link</a></div></div></div>`;
+  $('#retry').onclick = () => location.reload();
 }
 function outdated() {
   root.innerHTML = `<div class="wiz"><div class="card"><h2>This hub needs an update</h2>

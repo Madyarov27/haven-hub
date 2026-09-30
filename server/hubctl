@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# hubctl — run Haven Hub on your own server as a normal user (no sudo, no Docker).
+#   hubctl start | stop | restart | status | logs [tunnel] | ensure | deploy | quick-tunnel | install-cron
+#   hubctl admin-links | reset-link KEY | import-code | setup-code | backup | export | set-webhook | remind | weekly-report
+set -uo pipefail
+H="${HAVEN_HOME:-$HOME/haven}"
+NODE="$H/node/bin/node"; APP="$H/app"; RUN="$H/run"; LOGS="$H/logs"; CF="$H/bin/cloudflared"
+mkdir -p "$RUN" "$LOGS" "$H/data" "$H/backups"; chmod 700 "$H"
+[ -f "$H/.env" ] && { set -a; . "$H/.env"; set +a; }
+PORT="${PORT:-8787}"
+
+alive() { [ -f "$RUN/$1.pid" ] && kill -0 "$(cat "$RUN/$1.pid")" 2>/dev/null; }
+rotate() { for f in "$LOGS"/*.log; do [ -f "$f" ] && [ "$(stat -c %s "$f")" -gt 10485760 ] && mv -f "$f" "$f.1"; done; true; }
+
+start_app() {
+  alive app && return 0
+  ( cd "$APP" && nohup "$NODE" --disable-warning=ExperimentalWarning server/index.mjs >>"$LOGS/app.log" 2>&1 & echo $! >"$RUN/app.pid" )
+  sleep 1; alive app && echo "app started (pid $(cat "$RUN/app.pid"))" || { echo "app failed to start — hubctl logs"; return 1; }
+}
+start_tunnel() {
+  alive tunnel && return 0
+  if [ -n "${CF_TUNNEL_TOKEN:-}" ]; then
+    # the token goes in through the environment, never on the command line (other users can see command lines)
+    ( TUNNEL_TOKEN="$CF_TUNNEL_TOKEN" nohup "$CF" tunnel --no-autoupdate run >>"$LOGS/tunnel.log" 2>&1 & echo $! >"$RUN/tunnel.pid" )
+    echo "tunnel started"
+  elif [ "${QUICK_TUNNEL:-}" = "1" ]; then quick_tunnel; fi
+}
+quick_tunnel() {
+  alive tunnel && { echo "tunnel already running: $(cat "$RUN/public_url" 2>/dev/null)"; return 0; }
+  : >"$LOGS/tunnel.log"
+  ( nohup "$CF" tunnel --no-autoupdate --url "http://127.0.0.1:$PORT" >>"$LOGS/tunnel.log" 2>&1 & echo $! >"$RUN/tunnel.pid" )
+  for i in $(seq 1 30); do
+    u=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' "$LOGS/tunnel.log" | head -1)
+    [ -n "$u" ] && { echo "$u" >"$RUN/public_url"; echo "temporary address: $u  (test only — it changes on every restart)"; return 0; }
+    sleep 1
+  done
+  echo "quick tunnel did not report an address — hubctl logs tunnel"
+}
+stop_one() { alive "$1" && { kill "$(cat "$RUN/$1.pid")"; sleep 1; alive "$1" && kill -9 "$(cat "$RUN/$1.pid")"; }; rm -f "$RUN/$1.pid"; }
+
+case "${1:-status}" in
+  start)   start_app; start_tunnel ;;
+  stop)    stop_one tunnel; stop_one app; echo stopped ;;
+  restart) stop_one app; start_app ;;
+  ensure)  rotate; alive app || { echo "$(date -Is) ensure: app was down, starting" >>"$LOGS/app.log"; start_app; }
+           { [ -n "${CF_TUNNEL_TOKEN:-}" ] || [ "${QUICK_TUNNEL:-}" = "1" ]; } && ! alive tunnel && start_tunnel; true ;;
+  status)  for p in app tunnel; do alive $p && echo "$p: running (pid $(cat "$RUN/$p.pid"))" || echo "$p: stopped"; done
+           curl -s -m 5 "http://127.0.0.1:$PORT/healthz" && echo; alive app && "$NODE" "$APP/server/cli.mjs" status ;;
+  logs)    tail -n 80 -f "$LOGS/${2:-app}.log" ;;
+  quick-tunnel) quick_tunnel ;;
+  deploy)  git -C "$APP" pull --ff-only && ( cd "$APP" && PATH="$H/node/bin:$PATH" npm ci --omit=dev --no-audit --no-fund --loglevel=error ) && stop_one app && start_app ;;
+  install-cron)
+    ( crontab -l 2>/dev/null | grep -v 'haven/hubctl\|hubctl ensure\|hubctl start'
+      echo "@reboot $H/hubctl start >/dev/null 2>&1"
+      echo "*/2 * * * * $H/hubctl ensure >/dev/null 2>&1" ) | crontab -
+    crontab -l ;;
+  *)       "$NODE" --disable-warning=ExperimentalWarning "$APP/server/cli.mjs" "$@" ;;
+esac

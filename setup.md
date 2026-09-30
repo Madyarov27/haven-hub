@@ -144,6 +144,8 @@ When a new version comes out, admins see an *Update available* banner. Updating 
 
 **The URL stays the same, so nobody needs a new link.** Don't click *New deployment* — that would create a new URL.
 
+On your own server, run `~/haven/hubctl deploy` instead.
+
 Coming from the first Team Hub (v3)? Paste v4 and deploy a new version as above. The Sheet upgrades itself on the first request: it adds the new columns and keeps every token and Telegram connection. Leads become admins. Then check **Settings**.
 
 ---
@@ -157,6 +159,67 @@ You don't need to — the shared site works for every Haven. But if you want you
 3. In `docs/config.js`, set `defaultHub` to your deployment ID (the `AKfy…` part of your Web app URL). Links then work without `?hub=`.
 4. In the hub, set **Settings → Hub & data → Website address** to your new address. Every personal link updates.
 5. **Custom domain:** add a `CNAME` record pointing to `<your-github-name>.github.io`, then set it in **GitHub → Settings → Pages → Custom domain**.
+
+## Run it on your own server (optional)
+
+Have a Linux server or VPS? The same `Code.gs` can run there on Node, with SQLite as the database. It gives you:
+- instant Telegram replies (a webhook instead of checking every minute);
+- no Google limits (email, timers, 1–3 s page loads);
+- your own domain.
+
+It needs **a normal user account**: no root, no Docker, no open ports. Cloudflare Tunnel makes the outgoing connection that puts the hub on your domain with HTTPS.
+
+**1. Install (about 5 minutes, as your normal user):**
+
+```bash
+mkdir -p ~/haven/bin && cd ~/haven
+curl -fsSL https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-x64.tar.xz | tar -xJ && mv node-v24.21.0-linux-x64 node
+curl -fsSL -o bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 && chmod +x bin/cloudflared
+git clone https://github.com/notazizelse/haven-hub app && (cd app && PATH=~/haven/node/bin:$PATH npm ci --omit=dev)
+ln -s ~/haven/app/server/hubctl ~/haven/hubctl && cp app/server/env.example .env && chmod 600 .env
+```
+
+Then edit `~/haven/.env`: set `PUBLIC_URL` (your domain), `HUB_TZ`, `SMTP_USER` / `SMTP_PASS` (a Gmail App Password), and `CF_TUNNEL_TOKEN` (see step 2).
+
+```bash
+~/haven/hubctl start && ~/haven/hubctl install-cron
+```
+
+The cron job restarts the hub after a reboot and checks it every 2 minutes.
+
+**2. Put it on your domain (Cloudflare, free):**
+1. Add your domain to Cloudflare.
+2. At your registrar, change the domain's **nameservers** to the two Cloudflare gives you.
+3. Go to **Zero Trust → Networks → Tunnels → Create a tunnel → Cloudflared**. Copy the token into `CF_TUNNEL_TOKEN`.
+4. In the tunnel, add a **Public hostname**: your domain → `http://localhost:8787`.
+5. Run `~/haven/hubctl restart`.
+
+No domain yet? `QUICK_TUNNEL=1` gives a temporary `https://….trycloudflare.com` address for testing. It changes on every restart.
+
+**3. Either start a new hub, or move your existing Google Sheet hub:**
+- **New hub:** open your domain → **Set up** → paste the code from `~/haven/hubctl setup-code`.
+- **Move an existing hub:**
+  1. Run `~/haven/hubctl import-code`.
+  2. In your Sheet, click **Haven Hub → Move this hub to my own server…** and paste your domain and the code.
+  3. People, tasks, personal links, Telegram connections, the bot and the proof photos all move. The Sheet becomes a frozen backup, and every old link forwards to the new address.
+  4. To undo: clear `moved_to` in the Sheet's Settings tab, then **Haven Hub → Turn on reminders**.
+
+**Every day:**
+
+| Command | Does |
+|---|---|
+| `hubctl status` | Is it up? People, tasks, messages waiting, last backup |
+| `hubctl logs` / `hubctl logs tunnel` | What happened |
+| `hubctl deploy` | Update to the newest version (git pull, then restart — about 2 s) |
+| `hubctl admin-links` | Lost your admin link |
+| `hubctl reset-link KEY` | A personal link leaked |
+| `hubctl backup` | Take a backup now |
+| `hubctl set-webhook` | Point the Telegram bot at the server again |
+
+**Backups:**
+- **Nightly:** `~/haven/backups/hub-YYYY-MM-DD.db` (the last 14 are kept), plus the proof files.
+- **Weekly:** admins get an emailed export every Sunday.
+- **To restore:** run `hubctl stop`, copy a backup over `~/haven/data/hub.db`, then run `hubctl start`.
 
 ---
 

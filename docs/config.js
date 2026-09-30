@@ -7,5 +7,5 @@ window.HUB_CONFIG = {
   templateSheet: '',
   repo: 'https://github.com/notazizelse/haven-hub',
   // The newest backend (Code.gs) version. Admins running an older one see an "update available" banner.
-  latestBackend: '4.0.0',
+  latestBackend: '4.1.0',
 };

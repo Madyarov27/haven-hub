@@ -15,7 +15,9 @@
  * The URL stays the same. Secrets never go in this file: personal tokens live in the Sheet, the bot token in Script properties.
  */
 
-const HUB_VERSION = '4.0.0';
+const HUB_VERSION = '4.1.0';
+// On your own server (server/index.mjs) this same file runs on Node; HUB_SERVER is then provided by the server.
+const SELF_HOSTED = typeof HUB_SERVER !== 'undefined' && !!HUB_SERVER;
 const DEFAULT_SITE = 'https://notazizelse.github.io/haven-hub';
 const HUB_RE = /^AKfy[\w-]{30,}$/;
 
@@ -29,6 +31,7 @@ const TABS = {
   Rules: ['title', 'text'],
   Milestones: ['date', 'label', 'kind', 'public', 'done'],
   Applications: ['id', 'time', 'name', 'contact', 'age_group', 'interest', 'note', 'status', 'handled_by'],
+  Sponsors: ['name', 'logo_url', 'link', 'note'],
   Links: ['name', 'access', 'personal_link', 'telegram_connected', 'message_to_send'],
   Report: ['time', 'what', 'detail'],
 };
@@ -65,9 +68,10 @@ const SETTINGS = [
   ['public_show_team', 'no', 'Public page lists first names + roles (off by default — most of the team are minors)'],
   ['join_form', 'yes', 'Public "Join the team" form'],
   ['join_intro', 'We need help with design, social media, outreach, tech and the event weekend. No experience needed.', 'Text above the join form'],
+  ['moved_to', '', 'Set when the hub moved to its own server: every request is sent to this address. Clear it to switch this Sheet back on'],
 ];
 const YESNO = ['weekly_report', 'email_reminders', 'done_alerts', 'group_done_posts', 'public_page', 'public_show_progress', 'public_show_team', 'join_form'];
-const URL_KEYS = ['site_url', 'signup_url', 'instagram', 'telegram_channel', 'website'];
+const URL_KEYS = ['site_url', 'signup_url', 'instagram', 'telegram_channel', 'website', 'moved_to'];
 
 /** Optional starter checklist added at setup. Days are relative to event_start. Edit or delete freely. */
 const STARTER = {
@@ -523,9 +527,11 @@ function uploadProof_(me, b) {
     const f = proofFolder_().createFile(Utilities.newBlob(Utilities.base64Decode(data), mime, name));
     f.setDescription(t.id + '|' + t.owner);
     log_(me.name, t.id, 'File uploaded', name);
-    return { ok: true, id: f.getId(), url: 'https://drive.google.com/file/d/' + f.getId() + '/view' };
+    return { ok: true, id: f.getId(), url: fileUrl_(f.getId()) };
   } catch (err) { botLog_('upload', String(err)); return { ok: false, error: 'Could not save the file: ' + String(err).slice(0, 80) }; }
 }
+/** Link written into the proof text. The website finds files by the "/file/d/<id>" part, on Google Drive and on the server alike. */
+function fileUrl_(id) { return SELF_HOSTED ? site_() + '/file/d/' + id : 'https://drive.google.com/file/d/' + id + '/view'; }
 function photoOut_(me, id) {
   try {
     const f = DriveApp.getFileById(id), parts = String(f.getDescription() || '').split('|');
@@ -729,7 +735,7 @@ function saveSettings_(me, b) {
   log_(me.name, '', 'Settings saved', Object.keys(out).join(', '));
   return { ok: true, settings: settingsOut_(), event: eventOut_(), warning: warn };
 }
-const LISTS = ['Meetings', 'Rules', 'Milestones'];
+const LISTS = ['Meetings', 'Rules', 'Milestones', 'Sponsors'];
 function saveList_(me, b) {
   const tab = String(b.tab || ''), rows = Array.isArray(b.rows) ? b.rows.slice(0, 200) : null;
   if (LISTS.indexOf(tab) < 0 || !rows) return { ok: false, error: 'Bad list.' };
@@ -737,20 +743,22 @@ function saveList_(me, b) {
   rows.forEach((r, i) => {
     const o = {};
     TABS[tab].forEach(k => { o[k] = clean_(r && r[k], k === 'text' || k === 'what' ? 600 : 200); });
-    if (!(o.title || o.label || o.what)) return; // empty row: skip
+    if (!(o.title || o.label || o.what || o.name)) return; // empty row: skip
+    if (tab === 'Sponsors') { ['logo_url', 'link'].forEach(k => { if (o[k] && !isUrl_(o[k])) errs.push(`Row ${i + 1}: ${k === 'link' ? 'the link' : 'the logo'} must start with https://`); }); clean.push(o); return; }
     if (tab !== 'Rules' && !isDate_(o.date)) errs.push(`Row ${i + 1}: the date must be YYYY-MM-DD.`);
     if (tab === 'Meetings' && o.time && !/^\d\d:\d\d$/.test(o.time)) errs.push(`Row ${i + 1}: time must be HH:MM.`);
     if (tab === 'Milestones') { o.kind = ['gate', 'deadline', 'event'].indexOf(o.kind) >= 0 ? o.kind : 'deadline'; o.public = yn_(o.public); o.done = yn_(o.done); }
     clean.push(o);
   });
   if (errs.length) return { ok: false, error: errs[0], errors: errs };
-  if (tab !== 'Rules') clean.sort((a, b2) => (a.date + (a.time || '')) < (b2.date + (b2.time || '')) ? -1 : 1);
+  if (tab !== 'Rules' && tab !== 'Sponsors') clean.sort((a, b2) => (a.date + (a.time || '')) < (b2.date + (b2.time || '')) ? -1 : 1);
   replaceAll_(tab, clean);
   log_(me.name, '', tab + ' saved', clean.length + ' rows');
   return { ok: true, rows: clean };
 }
 function rules_() { return rows_('Rules').filter(r => r.title).map(r => ({ title: r.title, text: r.text })); }
 function meetings_() { return rows_('Meetings').filter(m => m.date || m.what).map(m => ({ date: m.date, time: m.time, where: m.where, what: m.what })); }
+function sponsors_() { return rows_('Sponsors').filter(x => x.name).map(x => ({ name: x.name, logo_url: x.logo_url, link: x.link, note: x.note })); }
 function milestones_() { return rows_('Milestones').filter(m => m.label).map(m => ({ date: m.date, label: m.label, kind: m.kind || 'deadline', public: m.public === 'yes', done: m.done === 'yes' })); }
 
 // ================================================================== API
@@ -801,6 +809,8 @@ function dispatch_(q, method) {
   resetMemo_();
   try {
     maybeUpgrade_();
+    const moved = S_().moved_to;
+    if (moved && !SELF_HOSTED) return { ok: false, code: 'moved', url: moved, error: 'This Team Hub moved to ' + moved };
     const name = String(q.action || 'me'), a = Object.prototype.hasOwnProperty.call(ACTIONS, name) ? ACTIONS[name] : null;
     if (!a) return { ok: false, error: 'Unknown action.' };
     if (a.post && method !== 'POST') return { ok: false, error: 'Use POST.' };
@@ -839,6 +849,7 @@ function apiPublic_() {
     progress: S.public_show_progress === 'yes' ? { done: done, total: tasks.length, milestones: milestones_().filter(m => m.public).map(m => ({ date: m.date, label: m.label, done: m.done })) } : null,
     team: S.public_show_team === 'yes' ? team_().map(p => ({ name: first_(p), role: p.role, area: p.area })) : null,
     join: S.join_form === 'yes' ? { intro: S.join_intro } : null,
+    sponsors: sponsors_(),
   });
 }
 function apiMe_(me, q) {
@@ -871,13 +882,15 @@ function apiMe_(me, q) {
     out.people = people_().map(personOut_);
     out.applications = rows_('Applications').map(appOut_).reverse();
     out.settings = settingsOut_();
-    out.sheetUrl = ss_().getUrl();
+    out.sponsors = sponsors_();
+    out.hosting = SELF_HOSTED ? 'server' : 'google';
+    out.sheetUrl = SELF_HOSTED ? '' : ss_().getUrl();
   }
   return out;
 }
 function apiExport_() {
   const data = {};
-  ['Settings', 'People', 'Tasks', 'Log', 'Meetings', 'Rules', 'Milestones', 'Applications'].forEach(n => {
+  ['Settings', 'People', 'Tasks', 'Log', 'Meetings', 'Rules', 'Milestones', 'Applications', 'Sponsors'].forEach(n => {
     data[n] = rows_(n).map(r => { const o = {}; Object.keys(r).forEach(k => { if (k[0] !== '_' && k !== 'token' && k !== 'chat_id') o[k] = r[k]; }); return o; });
   });
   return { ok: true, version: HUB_VERSION, exported: now_(), data: data };
@@ -886,21 +899,25 @@ function apiHealth_() {
   const trig = ScriptApp.getProjectTriggers().map(t => t.getHandlerFunction());
   let quota = null; try { quota = MailApp.getRemainingDailyQuota(); } catch (e) { /* no mail scope yet */ }
   return { ok: true, version: HUB_VERSION, tz: tz_(), triggers: trig, mailQuota: quota, proofFolder: !!prop_('PROOF_FOLDER_ID'), bot: !!prop_('BOT_TOKEN'),
-    hubId: S_().hub_id, siteUrl: site_(), sheetUrl: ss_().getUrl(), lastError: prop_('BOT_LAST_ERROR') };
+    hubId: S_().hub_id, siteUrl: site_(), sheetUrl: SELF_HOSTED ? '' : ss_().getUrl(), lastError: prop_('BOT_LAST_ERROR'), server: SELF_HOSTED ? HUB_SERVER.stats() : null };
 }
 
 // ================================================================== first-run setup + upgrade
 function apiSetup_(_, b) {
   if (hasAdmin_()) return { ok: false, error: 'This hub is already set up. Open your admin link — or in the Sheet use the menu Haven Hub → Show admin links.' };
-  const m = String(b.sheet || '').match(/\/d\/([\w-]{20,})/) || String(b.sheet || '').trim().match(/^([\w-]{20,})$/);
-  if (!m || m[1] !== ss_().getId()) return { ok: false, code: 'proof', error: 'That is not the Google Sheet this hub runs on. Paste the address of YOUR copy of the Sheet (from the browser bar).' };
+  if (SELF_HOSTED) {
+    if (!HUB_SERVER.checkSetupCode(String(b.sheet || '').trim())) return { ok: false, code: 'proof', error: 'That setup code is wrong or used up. On the server run:  hubctl setup-code' };
+  } else {
+    const m = String(b.sheet || '').match(/\/d\/([\w-]{20,})/) || String(b.sheet || '').trim().match(/^([\w-]{20,})$/);
+    if (!m || m[1] !== ss_().getId()) return { ok: false, code: 'proof', error: 'That is not the Google Sheet this hub runs on. Paste the address of YOUR copy of the Sheet (from the browser bar).' };
+  }
   const errs = [], name = clean_(b.name, 60), email = clean_(b.email, 120).toLowerCase(), ev = b.event || {};
   if (!name) errs.push('Write your name.');
   if (email && !isEmail_(email)) errs.push('Your email looks wrong.');
   const vals = {
     event_name: clean_(ev.name, 80), city: clean_(ev.city, 60), event_start: clean_(ev.start, 10) || SETTINGS[2][1], event_end: clean_(ev.end, 10) || SETTINGS[3][1],
     timezone: clean_(ev.timezone, 60) || Session.getScriptTimeZone(), public_page: yn_(b.publicPage !== false), join_form: yn_(b.joinForm !== false),
-    signup_url: clean_(ev.signup, 200), hub_id: HUB_RE.test(String(b.hub || '')) ? String(b.hub) : '', site_url: isUrl_(clean_(b.site, 200)) ? clean_(b.site, 200).replace(/\/+$/, '') : DEFAULT_SITE,
+    signup_url: clean_(ev.signup, 200), hub_id: !SELF_HOSTED && HUB_RE.test(String(b.hub || '')) ? String(b.hub) : '', site_url: isUrl_(clean_(b.site, 200)) ? clean_(b.site, 200).replace(/\/+$/, '') : DEFAULT_SITE,
   };
   if (!vals.event_name) errs.push('Write the event name.');
   if (!isDate_(vals.event_start) || !isDate_(vals.event_end) || vals.event_end < vals.event_start) errs.push('Check the event dates.');
@@ -976,6 +993,8 @@ function onOpen() {
     .addItem('Rebuild the Progress tab', 'buildProgress')
     .addItem('Turn on reminders', 'menuTriggers')
     .addItem('Check the Telegram bot', 'menuBotDoctor')
+    .addSeparator()
+    .addItem('Move this hub to my own server…', 'menuMoveToServer')
     .addToUi();
 }
 function menuAdminLinks() {
@@ -996,9 +1015,62 @@ function menuResetLink() {
 }
 function menuTriggers() { resetMemo_(); installTriggers_(); SpreadsheetApp.getUi().alert('Reminders are on: every day at ' + (Number(S_().reminder_hour) || 18) + ':00 (' + tz_() + ')' + (prop_('BOT_TOKEN') ? ', and the bot checks Telegram every minute.' : '.')); }
 function menuBotDoctor() { SpreadsheetApp.getUi().alert(botDoctor()); }
+function menuMoveToServer() {
+  const ui = SpreadsheetApp.getUi();
+  const a = ui.prompt('Move this hub to your own server (1/2)', 'Address of the server, e.g. https://haventashkent.xyz', ui.ButtonSet.OK_CANCEL);
+  if (a.getSelectedButton() !== ui.Button.OK) return;
+  const b = ui.prompt('Move this hub to your own server (2/2)', 'One-time import code (on the server run:  hubctl import-code)', ui.ButtonSet.OK_CANCEL);
+  if (b.getSelectedButton() !== ui.Button.OK) return;
+  try { ui.alert('Done', moveToServer_(a.getResponseText().trim(), b.getResponseText().trim()), ui.ButtonSet.OK); }
+  catch (e) { ui.alert('Not moved', String(e.message || e) + '\n\nNothing changed in this Sheet.', ui.ButtonSet.OK); }
+}
+
+// ================================================================== move to your own server (server/ in the haven-hub repo)
+/** Everything the server needs: every tab (tokens + Telegram links included) and the bot settings. Proof files go separately, in batches. */
+function moveBundle_() {
+  resetMemo_();
+  const sheets = {}, props = {};
+  ss_().getSheets().forEach(sh => {
+    const n = sh.getName(); if (n === 'Progress' || n === 'Sheet1') return;
+    sheets[n] = sh.getLastRow() ? sh.getDataRange().getValues().map(r => r.map(cell_)) : [];
+  });
+  ['BOT_TOKEN', 'BOT_USERNAME', 'GROUP_CHAT_ID', 'GROUP_THREAD_ID', 'PROOF_FOLDER_ID'].forEach(k => { if (prop_(k)) props[k] = prop_(k); });
+  return { version: HUB_VERSION, tz: tz_(), exported: now_(), sheets: sheets, props: props };
+}
+function moveToServer_(server, code) {
+  server = String(server || '').replace(/\/+$/, '');
+  if (!/^https:\/\/[^\s\/]+/.test(server)) throw new Error('The server address must start with https://');
+  const post = (path, body) => {
+    const res = UrlFetchApp.fetch(server + path, { method: 'post', contentType: 'application/json', muteHttpExceptions: true, payload: JSON.stringify(body) });
+    let j; try { j = JSON.parse(res.getContentText()); } catch (e) { throw new Error('The server answered HTTP ' + res.getResponseCode() + ' — is the address right and the hub running?'); }
+    if (!j.ok) throw new Error(j.error || 'The server refused the import.');
+    return j;
+  };
+  const start = post('/admin/import', { code: code, bundle: moveBundle_() });
+  let files = 0, batch = [], size = 0;
+  const send = () => { if (batch.length) { post('/admin/import/files', { code: code, importId: start.importId, files: batch }); files += batch.length; batch = []; size = 0; } };
+  if (prop_('PROOF_FOLDER_ID')) {
+    const it = proofFolder_().getFiles();
+    while (it.hasNext()) {
+      const f = it.next(), bl = f.getBlob(), data = Utilities.base64Encode(bl.getBytes());
+      if (size + data.length > 7000000) send();
+      batch.push({ id: f.getId(), name: f.getName(), mime: bl.getContentType(), desc: f.getDescription() || '', data: data }); size += data.length;
+    }
+    send();
+  }
+  const done = post('/admin/import/finish', { code: code, importId: start.importId });
+  // Switch this Sheet off: every link now forwards to the server, and the old timers stop (the old bot poller would fight the server's webhook).
+  saveSettingsRaw_({ moved_to: server });
+  ScriptApp.getProjectTriggers().forEach(t => { if (['pollTelegram', 'eveningReminders', 'weeklyReport'].indexOf(t.getHandlerFunction()) >= 0) ScriptApp.deleteTrigger(t); });
+  const msg = `Moved to ${server}: ${done.people} people, ${done.tasks} tasks, ${files} proof files${done.bot ? ', Telegram bot @' + done.bot : ''}.\n` +
+    `This Sheet is now a frozen backup and every old link forwards to the server.\nTo undo: clear moved_to in the Settings tab, then Haven Hub → Turn on reminders.`;
+  log_('system', '', 'Moved to server', server); report_('Moved to server', msg);
+  return msg;
+}
 
 // ================================================================== reminders + reports
 function installTriggers_() {
+  if (SELF_HOSTED) return; // the server's own scheduler runs reminders and reports
   const S = S_(), tz = tz_(), hour = Math.min(23, Math.max(0, parseInt(S.reminder_hour, 10) || 18));
   ScriptApp.getProjectTriggers().forEach(t => { if (['pollTelegram', 'eveningReminders', 'weeklyReport'].indexOf(t.getHandlerFunction()) >= 0) ScriptApp.deleteTrigger(t); });
   if (prop_('BOT_TOKEN')) ScriptApp.newTrigger('pollTelegram').timeBased().everyMinutes(1).create();
@@ -1166,7 +1238,7 @@ function postGroup_(text) {
 }
 function proofBlobs_(proof) {
   if (!prop_('BOT_TOKEN')) return [];
-  const out = []; String(proof || '').replace(/drive\.google\.com\/file\/d\/([\w-]+)/g, (m, id) => { try { out.push(DriveApp.getFileById(id).getBlob()); } catch (e) { /* ignore */ } return m; });
+  const out = []; String(proof || '').replace(/\/file\/d\/([\w-]+)/g, (m, id) => { try { out.push(DriveApp.getFileById(id).getBlob()); } catch (e) { /* ignore */ } return m; });
   return out.slice(0, 4);
 }
 function sendPhoto_(chatId, blob, caption, extra) {
@@ -1187,7 +1259,7 @@ function postGroupPhoto_(blob, caption) {
 /** Runs every minute once a bot token is saved. Understands /start <code>, /tasks, /hub, /team and, in the organizer group, /setgroup and "T014 DONE — link". Everyone else is ignored. */
 function pollTelegram() {
   resetMemo_();
-  if (!prop_('BOT_TOKEN')) return;
+  if (!prop_('BOT_TOKEN') || SELF_HOSTED) return; // on a server the bot uses a webhook instead
   const lock = LockService.getScriptLock(); if (!lock.tryLock(25000)) return;
   try {
     const offset = Number(prop_('TG_OFFSET') || 0);
@@ -1290,7 +1362,9 @@ function botInfo_() {
     info.canJoinGroups = me.ok ? me.result.can_join_groups !== false : null; info.canReadAll = me.ok ? !!me.result.can_read_all_group_messages : null;
   }
   const trig = ScriptApp.getProjectTriggers().map(t => t.getHandlerFunction());
-  info.polling = trig.indexOf('pollTelegram') >= 0; info.reminders = trig.indexOf('eveningReminders') >= 0;
+  info.mode = SELF_HOSTED ? 'webhook' : 'polling';
+  info.polling = SELF_HOSTED ? (!!info.webhook && info.webhook === HUB_SERVER.webhookUrl()) : trig.indexOf('pollTelegram') >= 0;
+  info.reminders = SELF_HOSTED || trig.indexOf('eveningReminders') >= 0;
   const people = team_();
   info.connected = people.filter(p => p.chat_id).length; info.total = people.length; info.missing = people.filter(p => !p.chat_id).map(p => p.name);
   info.groupSet = !!prop_('GROUP_CHAT_ID'); info.groupTopic = prop_('GROUP_THREAD_ID');
@@ -1315,9 +1389,12 @@ function botDoctor() {
     else {
       L.push('✅ Token works: @' + me.result.username);
       if (prop_('BOT_USERNAME').replace(/^@/, '').toLowerCase() !== me.result.username.toLowerCase()) { setProp_('BOT_USERNAME', me.result.username); L.push('🔧 Saved the bot name (this makes the "Connect Telegram" button appear).'); }
-      const wh = tgCall_('getWebhookInfo', {});
-      if (wh.ok && wh.result.url) { tgCall_('deleteWebhook', {}); L.push('🔧 A webhook was blocking the bot — removed it.'); }
-      try { installTriggers_(); L.push('✅ Timers on: check for messages every minute + daily reminders.'); } catch (e) { L.push('❌ Could not install the timers: in the Sheet use Haven Hub → Turn on reminders.'); }
+      if (SELF_HOSTED) { HUB_SERVER.setWebhook(); L.push('✅ Telegram now delivers messages straight to the server (webhook).'); }
+      else {
+        const wh = tgCall_('getWebhookInfo', {});
+        if (wh.ok && wh.result.url) { tgCall_('deleteWebhook', {}); L.push('🔧 A webhook was blocking the bot — removed it.'); }
+        try { installTriggers_(); L.push('✅ Timers on: check for messages every minute + daily reminders.'); } catch (e) { L.push('❌ Could not install the timers: in the Sheet use Haven Hub → Turn on reminders.'); }
+      }
       const lead = activePeople_().find(p => isLead_(p) && p.chat_id);
       if (lead) { const r = tg_(lead.chat_id, '🧪 Bot check: if you can read this, the bot can message you.'); L.push(r.ok ? '✅ Test message delivered to ' + lead.name : '❌ Could not message ' + lead.name + ': ' + r.description); }
       else L.push('ℹ️ No lead has connected yet: Profile → Connect Telegram → Start.');

@@ -1,6 +1,6 @@
 /* First-run wizard: copy the Sheet → deploy → paste the URL → prove it's your Sheet → name the event → dashboard. */
 import { $, esc, icon, toast, busy, field, formValues, copy, store, zones, browserTz } from '../ui.js';
-import { hubFrom, getFrom, postTo, DEMO, DEMO_HUB, demoSheetUrl, siteUrl } from '../api.js';
+import { hubFrom, getFrom, postTo, DEMO, DEMO_HUB, SELF, demoSheetUrl, siteUrl } from '../api.js';
 
 const STEPS = ['Copy', 'Deploy', 'Prove', 'Event', 'Create'];
 const RAW = 'https://raw.githubusercontent.com/notazizelse/haven-hub/main/apps-script/Code.gs';
@@ -9,6 +9,7 @@ let st = null;
 export function setup(root, ctx) {
   st = st || Object.assign({ step: 1, url: '', hub: '', sheet: '', ev: { name: '', city: '', start: '2026-11-14', end: '2026-11-15', timezone: browserTz(), signup: '' }, name: '', role: 'Lead organizer', email: '', starter: true, publicPage: true, joinForm: true, done: null }, store.json('hh:wiz', {}));
   if (DEMO) { st.url = st.url || 'https://script.google.com/macros/s/' + DEMO_HUB + '/exec'; st.sheet = st.sheet || demoSheetUrl(); }
+  if (SELF) { st.hub = 'self'; if (st.step < 3) st.step = 3; }
   document.title = 'Set up Haven Hub';
   const save = () => { const c = Object.assign({}, st); delete c.done; store.set('hh:wiz', JSON.stringify(c)); };
   const go = n => { st.step = n; save(); setup(root, ctx); window.scrollTo(0, 0); };
@@ -27,12 +28,15 @@ export function setup(root, ctx) {
     <div class="banner info">${icon('eye')}<div class="small">“Anyone” means anyone can <i>reach</i> the hub — it still only answers to people with a personal link, and only shows what your public-page settings allow.</div></div>
     <form id="f2">${field({ label: 'Web app URL', name: 'url', value: st.url, required: true, placeholder: 'https://script.google.com/macros/s/AKfy…/exec' })}<div id="ping"></div>
     <div class="row"><button class="btn ghost" type="button" data-back>Back</button><button class="btn primary" type="submit">Check & continue</button></div></form>`;
-  if (st.step === 3) body = `<h2>3. Prove it's your Sheet</h2><p class="muted">Paste the address of your Google Sheet (from the browser's address bar). The hub checks it's the same Sheet it runs on — so nobody else can claim your hub.</p>
+  if (st.step === 3 && SELF) body = `<h2>1. Prove it's your server</h2><p class="muted">On the server, run <code>hubctl setup-code</code> and paste the code here. It works once, for 2 hours — so nobody else can claim your hub.</p>
+    <form id="f3">${field({ label: 'Setup code', name: 'sheet', value: '', required: true, placeholder: 'from: hubctl setup-code', attrs: 'autocomplete="off"' })}
+    <div class="row"><button class="btn primary" type="submit">Continue</button></div></form>`;
+  else if (st.step === 3) body = `<h2>3. Prove it's your Sheet</h2><p class="muted">Paste the address of your Google Sheet (from the browser's address bar). The hub checks it's the same Sheet it runs on — so nobody else can claim your hub.</p>
     <form id="f3">${field({ label: 'Your Google Sheet address', name: 'sheet', value: st.sheet, required: true, placeholder: 'https://docs.google.com/spreadsheets/d/…/edit' })}
     <div class="row"><button class="btn ghost" type="button" data-back>Back</button><button class="btn primary" type="submit">Continue</button></div></form>`;
   if (st.step === 4) {
     const tz = zones(); if (!tz.includes(st.ev.timezone)) tz.unshift(st.ev.timezone);
-    body = `<h2>4. Your event and you</h2><p class="muted">You can change all of this later in Settings.</p>
+    body = `<h2>${SELF ? 2 : 4}. Your event and you</h2><p class="muted">You can change all of this later in Settings.</p>
     <form id="f4"><div class="form-grid">
       ${field({ label: 'City', name: 'city', value: st.ev.city, required: true, placeholder: 'Springfield' })}
       ${field({ label: 'Event name', name: 'evname', value: st.ev.name, required: true, placeholder: 'Haven Springfield' })}
@@ -45,7 +49,7 @@ export function setup(root, ctx) {
       ${field({ label: 'Your email (optional)', name: 'email', type: 'email', value: st.email, full: true, hint: 'We email your admin link to you — handy if you lose it.' })}
     </div><div class="row"><button class="btn ghost" type="button" data-back>Back</button><button class="btn primary" type="submit">Continue</button></div></form>`;
   }
-  if (st.step === 5) body = `<h2>5. Last choices</h2>
+  if (st.step === 5) body = `<h2>${SELF ? 3 : 5}. Last choices</h2>
     <form id="f5">${field({ label: 'Add the Haven starter checklist', name: 'starter', type: 'toggle', value: st.starter, hint: '13 tasks (venue in writing, adults, parent guide, budget to HQ, ship check…), team rules and milestones — all assigned to you, with dates counted back from the event. Edit or delete freely.' })}
       ${field({ label: 'Public event page', name: 'publicPage', type: 'toggle', value: st.publicPage, hint: 'Your hub link shows a countdown, your signup link and progress. Team names stay hidden unless you turn them on.' })}
       ${field({ label: '“Join the team” form', name: 'joinForm', type: 'toggle', value: st.joinForm, hint: 'On the public page. Answers land in Dashboard → Applications.' })}
@@ -53,7 +57,7 @@ export function setup(root, ctx) {
       <div id="cerr"></div><div class="row"><button class="btn ghost" type="button" data-back>Back</button><button class="btn accent lg" type="submit">${icon('zap')} Create my hub</button></div></form>`;
 
   root.innerHTML = `<div class="wiz"><div class="wiz-top"><a href="#/"><img src="assets/logo-orange.png" alt="Hack Club Haven" width="96" height="61"></a><div><h1 style="font-size:26px">Set up your Haven Hub</h1><div class="muted small">About 10 minutes · free · <a href="${esc(repo)}/blob/main/setup.md" target="_blank" rel="noopener">full guide</a></div></div></div>
-    <div class="stepper">${STEPS.map((s, i) => `<span class="${i + 1 === st.step ? 'on' : i + 1 < st.step ? 'done' : ''}">${i + 1}. ${s}</span>`).join('')}</div>
+    <div class="stepper">${STEPS.map((s, i) => [s, i]).filter(([, i]) => !SELF || i >= 2).map(([s, i], n) => `<span class="${i + 1 === st.step ? 'on' : i + 1 < st.step ? 'done' : ''}">${SELF ? n + 1 : i + 1}. ${SELF && s === 'Prove' ? 'Code' : s}</span>`).join('')}</div>
     <div class="card">${body}</div>${DEMO ? '<p class="small muted">Demo: the URL and Sheet are pre-filled; nothing leaves your browser.</p>' : ''}</div>`;
   root.querySelectorAll('[data-back]').forEach(b => { b.onclick = () => go(st.step - 1); });
   const n1 = $('#next1'); if (n1) n1.onclick = () => go(2);
@@ -78,7 +82,7 @@ export function setup(root, ctx) {
     st.hub = hub; out.innerHTML = `<p class="okline">${icon('check')} Connected — backend v${esc(r.version)}</p>`; save(); setTimeout(() => go(3), 500);
   };
   const f3 = $('#f3');
-  if (f3) f3.onsubmit = e => { e.preventDefault(); const v = f3.sheet.value.trim(); if (!/docs\.google\.com\/spreadsheets\/d\/[\w-]{20,}/.test(v)) return toast('Paste the full Sheet address — it contains /spreadsheets/d/…', 'err'); st.sheet = v; go(4); };
+  if (f3) f3.onsubmit = e => { e.preventDefault(); const v = f3.sheet.value.trim(); if (!SELF && !/docs\.google\.com\/spreadsheets\/d\/[\w-]{20,}/.test(v)) return toast('Paste the full Sheet address — it contains /spreadsheets/d/…', 'err'); st.sheet = v; go(4); };
   const f4 = $('#f4');
   if (f4) {
     f4.city.oninput = () => { const c = f4.city.value.trim(); if (!f4.evname.dataset.touched) f4.evname.value = c ? 'Haven ' + c : ''; if (!f4.signup.dataset.touched) f4.signup.value = c ? 'https://haven.hackclub.com/' + c.toLowerCase().normalize('NFKD').replace(/[^\w]+/g, '') : ''; };
@@ -112,7 +116,7 @@ function manual() {
 }
 
 function success(root, ctx) {
-  const r = st.done, open = DEMO ? '#/admin' : `?hub=${encodeURIComponent(st.hub)}#/admin`;
+  const r = st.done, open = DEMO || SELF ? '#/admin' : `?hub=${encodeURIComponent(st.hub)}#/admin`;
   root.innerHTML = `<div class="wiz"><div class="card" style="text-align:center;padding:28px 22px"><img src="assets/daven.png" alt="" width="150" height="103"><h1 style="font-size:30px;margin:8px 0">Your hub is ready!</h1>
     <p class="muted">This is <b>your admin link</b>. It is your key to the hub — bookmark it and don't share it.${r.emailed ? ' We also emailed it to you.' : ''}</p>
     <div class="linkbox" style="max-width:560px;margin:0 auto 14px"><input readonly value="${esc(r.link)}" aria-label="Admin link"><button class="btn soft" id="cl">${icon('copy')} Copy</button></div>

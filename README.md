@@ -16,6 +16,7 @@
 
 - **Backend:** one file, [`apps-script/Code.gs`](apps-script/Code.gs), bound to a Google Sheet and deployed as an Apps Script web app. The Sheet *is* the database — tabs for Settings, People, Tasks, Log, Meetings, Rules, Milestones and Applications. It also sends email (MailApp) and runs an optional team-only Telegram bot.
 - **Frontend:** a static site in [`docs/`](docs/) (plain ES modules, no build step), served by GitHub Pages and **shared by every Haven**. `?hub=<deployment id>` picks the Haven. Personal links add `&u=<name>&t=<secret>`; the site keeps that key in the browser and removes it from the address bar.
+- **Or on your own server:** [`server/`](server/) runs the *same* `Code.gs` on Node with SQLite. No root or Docker needed; Cloudflare Tunnel supplies the domain + HTTPS; the Telegram bot runs on a webhook; there's a one-click move from the Google Sheet. See [setup.md → Run it on your own server](setup.md#run-it-on-your-own-server-optional).
 - **Auth:** long random per-person links, checked on the server for every action. Roles: admin, lead, member, guest viewer.
 - **Brand:** colours, fonts (Darumadrop One, Jua, Nunito), logos and Daven come from HQ's [public Haven brand guide](https://www.figma.com/design/V1S8l3ju7K75ABGowht1gj/-PUBLIC--Haven-Brand-Guide).
 
@@ -26,7 +27,8 @@ apps-script/Code.gs        the whole backend — paste it into Apps Script
 apps-script/appsscript.json optional manifest
 docs/                      the website (GitHub Pages: main /docs)
 dev/                       local demo: Apps Script fakes + made-up data, python dev/serve.py
-tests/                     node --test tests/*.test.mjs — runs the real Code.gs against the fakes
+server/                    self-hosting: Node + SQLite runtime for Code.gs, Telegram webhook, email outbox, hubctl
+tests/                     node --test tests/*.test.mjs — runs the real Code.gs against the fakes (and on the server runtime)
 setup.md                   the setup guide
 ```
 

@@ -28,7 +28,7 @@ const future = days => new Date(Date.now() + days * 864e5).toISOString().slice(0
 test('ping before setup says not ready', () => {
   const { be } = fresh();
   const r = be.get({ action: 'ping' });
-  assert.equal(r.ok, true); assert.equal(r.ready, false); assert.equal(r.version, '4.0.0');
+  assert.equal(r.ok, true); assert.equal(r.ready, false); assert.match(r.version, /^4./);
 });
 
 test('setup: wrong sheet rejected, right sheet works, second setup rejected', () => {

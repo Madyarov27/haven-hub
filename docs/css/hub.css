@@ -416,3 +416,8 @@ input[readonly] { background: var(--line-2); }
 .chart .wk:focus rect, .chart .wk:hover rect { fill: rgba(120, 61, 43, .05); }
 .attn.click { cursor: pointer; border-radius: 8px; }
 .attn.click:hover b, .attn.click:focus b { color: var(--rust); }
+
+/* sponsors on the public page */
+.sponsors { display: flex; flex-wrap: wrap; gap: 14px 22px; align-items: center; }
+.sponsors a, .sponsors span { display: inline-flex; align-items: center; min-height: 44px; }
+.sponsors img { max-height: 44px; max-width: 170px; display: block; }

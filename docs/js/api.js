@@ -8,6 +8,8 @@ export const HUB_RE = /^AKfy[\w-]{30,}$/;
 export const params = new URLSearchParams(location.search);
 export const DEMO = params.has('demo');
 export const DEMO_HUB = 'AKfycbDEMOdemoDEMOdemoDEMOdemoDEMOdemo00000';
+/** Served by your own Haven Hub server (server/): one hub, API on the same address. */
+export const SELF = !!CFG.api && !DEMO;
 let hubId = '', demoSession = null, demoReady = null;
 
 /** Accepts a deployment ID, a Web-app URL (…/macros/s/<id>/exec) or any hub link. */
@@ -30,24 +32,25 @@ export function parseLink(s) {
 export function resolve() {
   const q = params.get('hub') || params.get('api');
   if (DEMO) hubId = DEMO_HUB;
+  else if (SELF) hubId = 'self';
   else if (q && hubFrom(q)) hubId = hubFrom(q);
   else if (CFG.defaultHub && HUB_RE.test(CFG.defaultHub)) hubId = CFG.defaultHub;
   else hubId = store.get('hh:last') || '';
-  if (!HUB_RE.test(hubId)) hubId = '';
+  if (!SELF && !HUB_RE.test(hubId)) hubId = '';
   if (hubId && params.get('t')) setSession({ u: params.get('u') || '', t: params.get('t') });
-  if (hubId && !DEMO) store.set('hh:last', hubId);
+  if (hubId && !DEMO && !SELF) store.set('hh:last', hubId);
   // Clean address bar: keep ?hub= (so a copied URL opens the public page), drop the key.
   const want = new URLSearchParams(params);
   want.delete('t'); want.delete('u'); want.delete('api');
-  if (hubId && !DEMO && !CFG.defaultHub) want.set('hub', hubId);
+  if (hubId && !DEMO && !SELF && !CFG.defaultHub) want.set('hub', hubId);
   const qs = want.toString();
   if (qs !== location.search.replace(/^\?/, '')) history.replaceState(null, '', location.pathname + (qs ? '?' + qs : '') + location.hash);
   return hubId;
 }
 export const hub = () => hubId;
-export const urlFor = id => 'https://script.google.com/macros/s/' + id + '/exec';
+export const urlFor = id => id === 'self' ? CFG.api : 'https://script.google.com/macros/s/' + id + '/exec';
 export const siteUrl = () => (location.origin + location.pathname).replace(/\/index\.html$/, '').replace(/\/$/, '');
-export const publicUrl = () => siteUrl() + '/' + (CFG.defaultHub && hubId === CFG.defaultHub ? '' : '?hub=' + hubId);
+export const publicUrl = () => siteUrl() + '/' + (SELF || (CFG.defaultHub && hubId === CFG.defaultHub) ? '' : '?hub=' + hubId);
 
 export function session() { return DEMO ? demoSession : store.json('hh:s:' + hubId, null); }
 export function setSession(s) { if (DEMO) { demoSession = s; return; } store.set('hh:s:' + hubId, JSON.stringify(s)); store.del('hh:c:' + hubId); }
@@ -75,10 +78,18 @@ export async function postTo(id, action, body) {
   try { return await parse(await fetch(urlFor(id), { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(b) })); } catch (e) { return offline; }
 }
 const withKey = o => { const s = session(); return Object.assign({}, o, s ? { u: s.u, t: s.t } : {}); };
-export const get = (action, extra) => getFrom(hubId, action, withKey(extra));
-export const post = (action, body) => postTo(hubId, action, withKey(body));
-export const getPublic = (action, extra) => getFrom(hubId, action, extra);
-export const postPublic = (action, body) => postTo(hubId, action, body);
+/** The hub moved to its own server: forward this person there, with their key. */
+export function followMove(r) {
+  if (!r || r.code !== 'moved' || !/^https:\/\/[^\s]+$/.test(String(r.url || ''))) return false;
+  const s = session();
+  location.replace(String(r.url).replace(/\/+$/, '') + '/' + (s ? '?u=' + encodeURIComponent(s.u) + '&t=' + encodeURIComponent(s.t) : '') + location.hash);
+  return true;
+}
+const follow = p => p.then(r => { if (followMove(r)) return new Promise(() => {}); return r; });
+export const get = (action, extra) => follow(getFrom(hubId, action, withKey(extra)));
+export const post = (action, body) => follow(postTo(hubId, action, withKey(body)));
+export const getPublic = (action, extra) => follow(getFrom(hubId, action, extra));
+export const postPublic = (action, body) => follow(postTo(hubId, action, body));
 
 // ------------------------------------------------------------------ dev mock: ?demo=1 runs the REAL Code.gs in the browser
 // Only works when the repo root is served (it loads ../apps-script/Code.gs and ../dev/*). ?demo=fresh starts un-set-up.

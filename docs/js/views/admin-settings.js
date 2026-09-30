@@ -44,7 +44,7 @@ export function settings(ctx) {
     ${form('s-hub', 'Hub & data', 'Advanced — you rarely need to change these.', `
       ${field({ label: 'Website address', name: 'site_url', type: 'url', value: S.site_url, hint: 'Change it only if you run your own copy of the website.' })}
       ${field({ label: 'Hub ID (web-app deployment)', name: 'hub_id', value: S.hub_id, hint: 'Part of every personal link. Filled in automatically.' })}`,
-      `<a class="btn ghost" href="${esc(D.sheetUrl || '#')}" target="_blank" rel="noopener">${icon('external')} Open the Google Sheet</a><button class="btn ghost" type="button" id="exp">${icon('download')} Export all data</button>`)}
+      `${D.sheetUrl ? `<a class="btn ghost" href="${esc(D.sheetUrl)}" target="_blank" rel="noopener">${icon('external')} Open the Google Sheet</a>` : ''}<button class="btn ghost" type="button" id="exp">${icon('download')} Export all data</button>`)}
     <div class="card"><div class="card-h"><h3>About this hub</h3><button class="btn ghost sm" id="hchk">Run a health check</button></div>
       <p class="small muted" style="margin:0">Backend v${esc(D.version)} · website latest v${esc(CFG.latestBackend || '?')} · <a href="${esc(CFG.repo || '#')}" target="_blank" rel="noopener">Haven Hub on GitHub</a></p><div id="hout" class="small" style="margin-top:8px"></div></div>
   </div></div>`;
@@ -73,11 +73,14 @@ export function settings(ctx) {
     const btn = e.currentTarget;
     busy(btn, true, 'Checking…'); const r = await ctx.api.get('health'); busy(btn, false);
     if (!r.ok) return toast(r.error, 'err');
-    const has = f => r.triggers.includes(f), row = (ok, t) => `<div>${ok ? '✅' : '⚠️'} ${t}</div>`;
-    $('#hout').innerHTML = row(has('eveningReminders'), `Daily reminders ${has('eveningReminders') ? 'on' : 'off — in the Sheet: Haven Hub → Turn on reminders'}`) +
-      row(!r.bot || has('pollTelegram'), r.bot ? (has('pollTelegram') ? 'Bot checks Telegram every minute' : 'Bot timer missing — press “Check the bot”') : 'No Telegram bot (optional)') +
+    const has = f => r.triggers.includes(f), row = (ok, t) => `<div>${ok ? '✅' : '⚠️'} ${t}</div>`, sv = r.server;
+    $('#hout').innerHTML = (sv
+      ? row(true, `Running on your own server · up ${sv.uptimeMin} min`) + row(sv.email, sv.email ? 'Email is set up' : 'Email not set up — SMTP_USER / SMTP_PASS in ~/haven/.env') +
+        row(!sv.outbox.failed24h, `${sv.outbox.pending} message(s) waiting to send · ${sv.outbox.failed24h} failed today`) + row(!!sv.lastBackup, sv.lastBackup ? 'Last backup ' + esc(sv.lastBackup.slice(0, 16).replace('T', ' ')) : 'No backup yet (runs nightly)')
+      : row(has('eveningReminders'), `Daily reminders ${has('eveningReminders') ? 'on' : 'off — in the Sheet: Haven Hub → Turn on reminders'}`) +
+        row(!r.bot || has('pollTelegram'), r.bot ? (has('pollTelegram') ? 'Bot checks Telegram every minute' : 'Bot timer missing — press “Check the bot”') : 'No Telegram bot (optional)') +
+        row(!!r.hubId, r.hubId ? 'Hub ID set' : 'Hub ID missing — open the hub once from your admin link')) +
       row(r.mailQuota === null || r.mailQuota > 10, r.mailQuota === null ? 'Email not authorised yet' : `${r.mailQuota} emails left today`) +
-      row(!!r.hubId, r.hubId ? 'Hub ID set' : 'Hub ID missing — open the hub once from your admin link') +
       row(!r.lastError, r.lastError ? 'Last error: ' + esc(r.lastError) : 'No errors recorded') + `<div class="muted">Time zone ${esc(r.tz)} · backend v${esc(r.version)}</div>`;
   };
   // Telegram
@@ -98,7 +101,9 @@ export function settings(ctx) {
     const r = await ctx.api.get('botinfo'); if (!r.ok) return say('❌ ' + esc(r.error));
     const i = r.info, row = (ok, text, fix) => `<div>${ok ? '✅' : '❌'} ${text}${!ok && fix ? `<br><span class="muted">→ ${fix}</span>` : ''}</div>`;
     say([row(i.tokenOk, i.tokenOk ? 'Telegram accepts the token (@' + esc(i.username) + ')' : 'Telegram rejected the token: ' + esc(i.tokenError || ''), 'get a fresh token from @BotFather and paste it above'),
-      row(!i.webhook, 'No webhook blocking the bot', 'save the token again'), row(i.polling, 'Timer checks messages every minute', 'save the token again'),
+      ...(i.mode === 'webhook'
+        ? [row(i.polling, 'Telegram delivers messages to the hub instantly (webhook)', 'wait a minute and check again — or on the server: hubctl set-webhook')]
+        : [row(!i.webhook, 'No webhook blocking the bot', 'save the token again'), row(i.polling, 'Timer checks messages every minute', 'save the token again')]),
       row(i.reminders, 'Daily reminders are on', 'in the Sheet: Haven Hub → Turn on reminders'),
       row(i.canReadAll !== false, 'Bot can read group messages (for “T014 DONE”)', 'BotFather → /mybots → your bot → Bot Settings → Group Privacy → Turn off'),
       row(i.groupSet, 'Organizer group is set', 'add the bot to the group and send /setgroup there'),

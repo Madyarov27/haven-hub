@@ -39,46 +39,46 @@ class FakeRange {
 }
 ['setNumberFormat', 'setFontWeight', 'setBackground', 'setFontColor', 'setFontSize', 'setDataValidation'].forEach(k => { FakeRange.prototype[k] = function () { return this; }; });
 
-class FakeSheet {
-  constructor(name) { this.name = name; this.data = []; }
+export class FakeSheet {
+  constructor(name, data) { this.name = name; this.data = data || []; this.dirty = !data; }
   getName() { return this.name; }
-  set(r, c, v) { while (this.data.length < r) this.data.push([]); const row = this.data[r - 1]; while (row.length < c) row.push(''); row[c - 1] = v; }
+  set(r, c, v) { this.dirty = true; while (this.data.length < r) this.data.push([]); const row = this.data[r - 1]; while (row.length < c) row.push(''); row[c - 1] = v; }
   getLastRow() { for (let i = this.data.length; i > 0; i--) if ((this.data[i - 1] || []).some(v => v !== '' && v !== null && v !== undefined)) return i; return 0; }
   getLastColumn() { return this.data.reduce((m, row) => { for (let j = row.length; j > 0; j--) if (row[j - 1] !== '' && row[j - 1] !== undefined) return Math.max(m, j); return m; }, 0); }
   getRange(r, c, nr, nc) { if (typeof r === 'string') { const x = a1(r); return new FakeRange(this, x.r, x.c, x.nr, x.nc); } return new FakeRange(this, r, c, nr || 1, nc || 1); }
   getDataRange() { return new FakeRange(this, 1, 1, Math.max(this.getLastRow(), 1), Math.max(this.getLastColumn(), 1)); }
-  deleteRow(r) { this.data.splice(r - 1, 1); }
-  clear() { this.data = []; }
+  deleteRow(r) { this.dirty = true; this.data.splice(r - 1, 1); }
+  clear() { this.dirty = true; this.data = []; }
 }
 ['setFrozenRows', 'clearConditionalFormatRules', 'setConditionalFormatRules', 'setColumnWidth'].forEach(k => { FakeSheet.prototype[k] = function () { return this; }; });
 
-class FakeSpreadsheet {
-  constructor(id) { this.id = id; this.sheets = [new FakeSheet('Sheet1')]; this.name = 'Untitled spreadsheet'; this.tz = ''; }
+export class FakeSpreadsheet {
+  constructor(id, sheets) { this.id = id; this.sheets = sheets || [new FakeSheet('Sheet1')]; this.name = 'Untitled spreadsheet'; this.tz = ''; this.structureDirty = false; this.url = null; }
   getId() { return this.id; }
-  getUrl() { return 'https://docs.google.com/spreadsheets/d/' + this.id + '/edit'; }
+  getUrl() { return this.url !== null ? this.url : 'https://docs.google.com/spreadsheets/d/' + this.id + '/edit'; }
   getSheetByName(n) { return this.sheets.find(s => s.name === n) || null; }
   getSheets() { return this.sheets.slice(); }
-  insertSheet(n, i) { const s = new FakeSheet(n); if (i === undefined) this.sheets.push(s); else this.sheets.splice(i, 0, s); return s; }
-  deleteSheet(s) { if (this.sheets.length < 2) throw new Error('Cannot delete the only sheet'); this.sheets = this.sheets.filter(x => x !== s); }
-  rename(n) { this.name = n; }
+  insertSheet(n, i) { this.structureDirty = true; const s = new FakeSheet(n); if (i === undefined) this.sheets.push(s); else this.sheets.splice(i, 0, s); return s; }
+  deleteSheet(s) { this.structureDirty = true; if (this.sheets.length < 2) throw new Error('Cannot delete the only sheet'); this.sheets = this.sheets.filter(x => x !== s); }
+  rename(n) { this.structureDirty = true; this.name = n; }
   setSpreadsheetTimeZone(tz) { this.tz = tz; }
   toast() {}
 }
 
-function builder(result) { // chainable no-op builder: every method returns itself, build() returns result
+export function builder(result) { // chainable no-op builder: every method returns itself, build() returns result
   return new Proxy({}, { get: (_, k) => k === 'build' || k === 'create' ? () => result() : () => builder(result) });
 }
 
-function b64encode(bytes) {
+export function b64encode(bytes) {
   if (typeof Buffer !== 'undefined') return Buffer.from(bytes).toString('base64');
   let s = ''; for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i] & 255); return btoa(s);
 }
-function b64decode(str) {
+export function b64decode(str) {
   if (typeof Buffer !== 'undefined') return Array.from(Buffer.from(str, 'base64'));
   const s = atob(str); return Array.from(s, ch => ch.charCodeAt(0));
 }
 
-function formatDate(date, tz, pattern) {
+export function formatDate(date, tz, pattern) {
   const parts = {};
   new Intl.DateTimeFormat('en-GB', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' })
     .formatToParts(date).forEach(p => { parts[p.type] = p.value; });
@@ -99,6 +99,7 @@ export function createGas(opts = {}) {
   const iter = arr => { let i = 0; return { hasNext: () => i < arr.length, next: () => arr[i++] }; };
   const folder = name => {
     const id = 'folder' + (++fileSeq), f = { id, name, getId: () => id, getUrl: () => 'https://drive.google.com/drive/folders/' + id,
+      getFiles: () => iter(Object.values(files).filter(x => x.getParents().next() === f)),
       createFile(b) { const fid = 'file' + (++fileSeq) + 'x'.repeat(20); let desc = ''; const file = { getId: () => fid, getName: () => b.getName(), getBlob: () => b, setDescription(d) { desc = d; return this; }, getDescription: () => desc, getParents: () => iter([f]) }; files[fid] = file; return file; } };
     folders[id] = f; return f;
   };
@@ -151,14 +152,15 @@ export function createGas(opts = {}) {
   return gas;
 }
 
-const GLOBALS = ['SpreadsheetApp', 'PropertiesService', 'CacheService', 'LockService', 'Utilities', 'ContentService', 'HtmlService', 'MailApp', 'UrlFetchApp', 'DriveApp', 'ScriptApp', 'Session', 'Logger', 'console'];
+export const GLOBALS = ['SpreadsheetApp', 'PropertiesService', 'CacheService', 'LockService', 'Utilities', 'ContentService', 'HtmlService', 'MailApp', 'UrlFetchApp', 'DriveApp', 'ScriptApp', 'Session', 'Logger', 'console'];
 
 /** Evaluates Code.gs with the fakes as its globals. Returns doGet/doPost plus call(fnName, ...args) for anything else. */
-export function loadBackend(code, gas) {
+export function loadBackend(code, gas, extra = {}) {
   const names = ['doGet', 'doPost', 'eveningReminders', 'weeklyReport', 'pollTelegram', 'upgrade', 'refreshLinks', 'buildProgress', 'botDoctor', 'installTriggers', 'addMissingTokens', 'resetToken', 'onOpen'];
   // eslint-disable-next-line no-new-func
-  const factory = new Function(...GLOBALS, code + `\n;return { ${names.join(', ')}, __eval: (s) => eval(s) };`);
-  const api = factory(...GLOBALS.map(k => gas[k]));
+  const extraNames = Object.keys(extra);
+  const factory = new Function(...GLOBALS, ...extraNames, code + `\n;return { ${names.join(', ')}, __eval: (s) => eval(s) };`);
+  const api = factory(...GLOBALS.map(k => gas[k]), ...extraNames.map(k => extra[k]));
   return {
     api,
     get(params) { return JSON.parse(api.doGet({ parameter: params }).getContent()); },
