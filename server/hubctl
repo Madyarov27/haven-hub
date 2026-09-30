@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # hubctl — run Haven Hub on your own server as a normal user (no sudo, no Docker).
 #   hubctl start | stop | restart | status | logs [tunnel] | ensure | deploy | quick-tunnel | tunnel-start | tunnel-stop | install-cron
+#   hubctl set-secret NAME          ask for a secret (hidden) and save it in ~/haven/.env — e.g. SMTP_PASS
+#   hubctl cf-login | cf-tunnel DOMAIN   put the hub on your domain with a Cloudflare named tunnel (no token copying)
 #   hubctl admin-links | reset-link KEY | import-code | setup-code | backup | export | set-webhook | remind | weekly-report
 set -uo pipefail
 H="${HAVEN_HOME:-$HOME/haven}"
@@ -20,7 +22,11 @@ start_app() {
 }
 start_tunnel() {
   alive tunnel && return 0
-  if [ -n "${CF_TUNNEL_TOKEN:-}" ]; then
+  if [ -n "${CF_TUNNEL_CONFIG:-}" ] && [ -f "$CF_TUNNEL_CONFIG" ]; then
+    ( exec setsid "$CF" tunnel --no-autoupdate --config "$CF_TUNNEL_CONFIG" run </dev/null >>"$LOGS/tunnel.log" 2>&1 ) &
+    echo $! >"$RUN/tunnel.pid"
+    echo "tunnel started ($CF_TUNNEL_CONFIG)"
+  elif [ -n "${CF_TUNNEL_TOKEN:-}" ]; then
     # the token goes in through the environment, never on the command line (other users can see command lines)
     ( export TUNNEL_TOKEN="$CF_TUNNEL_TOKEN"; exec setsid "$CF" tunnel --no-autoupdate run </dev/null >>"$LOGS/tunnel.log" 2>&1 ) &
     echo $! >"$RUN/tunnel.pid"
@@ -39,6 +45,8 @@ quick_tunnel() {
   done
   echo "quick tunnel did not report an address — hubctl logs tunnel"
 }
+# write KEY=VALUE into ~/haven/.env (keeps it private: 600)
+set_env() { local tmp; tmp=$(mktemp "$H/.env.XXXXXX"); { grep -v "^$1=" "$H/.env" 2>/dev/null || true; printf '%s=%s\n' "$1" "$2"; } >"$tmp"; chmod 600 "$tmp"; mv -f "$tmp" "$H/.env"; }
 # stop by pid file, and also by exact command path (in case a pid file went stale) — only this user's processes
 pat() { [ "$1" = app ] && echo "$APP/server/index.mjs" || echo "$CF tunnel"; }
 stop_one() {
@@ -52,7 +60,7 @@ case "${1:-status}" in
   stop)    stop_one tunnel; stop_one app; echo stopped ;;
   restart) stop_one app; start_app ;;
   ensure)  rotate; alive app || { echo "$(date -Is) ensure: app was down, starting" >>"$LOGS/app.log"; start_app; }
-           { [ -n "${CF_TUNNEL_TOKEN:-}" ] || [ "${QUICK_TUNNEL:-}" = "1" ]; } && ! alive tunnel && start_tunnel; true ;;
+           { [ -n "${CF_TUNNEL_CONFIG:-}" ] || [ -n "${CF_TUNNEL_TOKEN:-}" ] || [ "${QUICK_TUNNEL:-}" = "1" ]; } && ! alive tunnel && start_tunnel; true ;;
   status)  for p in app tunnel; do alive $p && echo "$p: running (pid $(cat "$RUN/$p.pid"))" || echo "$p: stopped"; done
            curl -s -m 5 "http://127.0.0.1:$PORT/healthz" && echo; alive app && "$NODE" "$APP/server/cli.mjs" status ;;
   logs)    tail -n 80 -f "$LOGS/${2:-app}.log" ;;
@@ -60,6 +68,40 @@ case "${1:-status}" in
   tunnel-start) start_tunnel ;;
   tunnel-stop) stop_one tunnel; rm -f "$RUN/public_url"; echo "tunnel stopped" ;;
   deploy)  git -C "$APP" pull --ff-only && ( cd "$APP" && PATH="$H/node/bin:$PATH" npm ci --omit=dev --no-audit --no-fund --loglevel=error ) && stop_one app && start_app ;;
+  set-secret)
+    k="${2:-}"; [[ "$k" =~ ^[A-Z0-9_]+$ ]] || { echo "usage: hubctl set-secret NAME   (e.g. SMTP_PASS)"; exit 1; }
+    read -r -s -p "Paste $k and press Enter (nothing is shown): " v; echo
+    v="${v//[[:space:]]/}"   # Gmail shows app passwords in groups of 4 — spaces don't matter
+    [ -n "$v" ] || { echo "nothing saved"; exit 1; }
+    [[ "$v" =~ ^[A-Za-z0-9._~:/@+=-]+$ ]] || { echo "that has unusual characters — nothing saved"; exit 1; }
+    set_env "$k" "$v"; unset v
+    echo "$k saved in $H/.env"; stop_one app; start_app ;;
+  cf-login)
+    # prints a Cloudflare link; open it while signed in to Cloudflare, pick your domain, press Authorize
+    [ -f "$HOME/.cloudflared/cert.pem" ] && { echo "already logged in to Cloudflare ($HOME/.cloudflared/cert.pem)"; exit 0; }
+    "$CF" tunnel login ;;
+  cf-tunnel)
+    d="${2:-}"; [[ "$d" =~ ^[a-z0-9.-]+\.[a-z]{2,}$ ]] || { echo "usage: hubctl cf-tunnel yourdomain.xyz"; exit 1; }
+    [ -f "$HOME/.cloudflared/cert.pem" ] || { echo "run: hubctl cf-login  first"; exit 1; }
+    name="haven-hub"
+    id=$("$CF" tunnel list -o json 2>/dev/null | "$NODE" -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{const t=(JSON.parse(s||"[]")||[]).find(x=>x.name===process.argv[1]&&!x.deleted_at);console.log(t?t.id:"")})' "$name")
+    [ -n "$id" ] || { "$CF" tunnel create "$name" >/dev/null && id=$("$CF" tunnel list -o json | "$NODE" -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{const t=JSON.parse(s).find(x=>x.name===process.argv[1]&&!x.deleted_at);console.log(t?t.id:"")})' "$name"); }
+    [ -n "$id" ] || { echo "could not create the tunnel"; exit 1; }
+    cat >"$H/cloudflared.yml" <<YML
+tunnel: $id
+credentials-file: $HOME/.cloudflared/$id.json
+ingress:
+  - hostname: $d
+    service: http://127.0.0.1:$PORT
+  - hostname: www.$d
+    service: http://127.0.0.1:$PORT
+  - service: http_status:404
+YML
+    chmod 600 "$H/cloudflared.yml"
+    "$CF" tunnel route dns --overwrite-dns "$name" "$d" && "$CF" tunnel route dns --overwrite-dns "$name" "www.$d"
+    set_env CF_TUNNEL_CONFIG "$H/cloudflared.yml"; set_env PUBLIC_URL "https://$d"; set_env QUICK_TUNNEL ""
+    stop_one tunnel; rm -f "$RUN/public_url"; stop_one app; start_app; CF_TUNNEL_CONFIG="$H/cloudflared.yml" start_tunnel
+    echo "tunnel $id → https://$d (DNS can take a few minutes)" ;;
   install-cron)
     ( crontab -l 2>/dev/null | grep -v 'haven/hubctl\|hubctl ensure\|hubctl start'
       echo "@reboot $H/hubctl start >/dev/null 2>&1"
