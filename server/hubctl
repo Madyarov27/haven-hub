@@ -14,21 +14,24 @@ rotate() { for f in "$LOGS"/*.log; do [ -f "$f" ] && [ "$(stat -c %s "$f")" -gt 
 
 start_app() {
   alive app && return 0
-  ( cd "$APP" && setsid nohup "$NODE" --disable-warning=ExperimentalWarning server/index.mjs </dev/null >>"$LOGS/app.log" 2>&1 & echo $! >"$RUN/app.pid" )
+  ( cd "$APP" && exec setsid "$NODE" --disable-warning=ExperimentalWarning "$APP/server/index.mjs" </dev/null >>"$LOGS/app.log" 2>&1 ) &
+  echo $! >"$RUN/app.pid"
   sleep 1; alive app && echo "app started (pid $(cat "$RUN/app.pid"))" || { echo "app failed to start — hubctl logs"; return 1; }
 }
 start_tunnel() {
   alive tunnel && return 0
   if [ -n "${CF_TUNNEL_TOKEN:-}" ]; then
     # the token goes in through the environment, never on the command line (other users can see command lines)
-    ( TUNNEL_TOKEN="$CF_TUNNEL_TOKEN" setsid nohup "$CF" tunnel --no-autoupdate run </dev/null >>"$LOGS/tunnel.log" 2>&1 & echo $! >"$RUN/tunnel.pid" )
+    ( export TUNNEL_TOKEN="$CF_TUNNEL_TOKEN"; exec setsid "$CF" tunnel --no-autoupdate run </dev/null >>"$LOGS/tunnel.log" 2>&1 ) &
+    echo $! >"$RUN/tunnel.pid"
     echo "tunnel started"
   elif [ "${QUICK_TUNNEL:-}" = "1" ]; then quick_tunnel; fi
 }
 quick_tunnel() {
   alive tunnel && { echo "tunnel already running: $(cat "$RUN/public_url" 2>/dev/null)"; return 0; }
   : >"$LOGS/tunnel.log"
-  ( setsid nohup "$CF" tunnel --no-autoupdate --url "http://127.0.0.1:$PORT" </dev/null >>"$LOGS/tunnel.log" 2>&1 & echo $! >"$RUN/tunnel.pid" )
+  ( exec setsid "$CF" tunnel --no-autoupdate --url "http://127.0.0.1:$PORT" </dev/null >>"$LOGS/tunnel.log" 2>&1 ) &
+  echo $! >"$RUN/tunnel.pid"
   for i in $(seq 1 30); do
     u=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' "$LOGS/tunnel.log" | head -1)
     [ -n "$u" ] && { echo "$u" >"$RUN/public_url"; echo "temporary address: $u  (test only — it changes on every restart)"; return 0; }
@@ -36,7 +39,13 @@ quick_tunnel() {
   done
   echo "quick tunnel did not report an address — hubctl logs tunnel"
 }
-stop_one() { alive "$1" && { kill "$(cat "$RUN/$1.pid")"; sleep 1; alive "$1" && kill -9 "$(cat "$RUN/$1.pid")"; }; rm -f "$RUN/$1.pid"; }
+# stop by pid file, and also by exact command path (in case a pid file went stale) — only this user's processes
+pat() { [ "$1" = app ] && echo "$APP/server/index.mjs" || echo "$CF tunnel"; }
+stop_one() {
+  alive "$1" && kill "$(cat "$RUN/$1.pid")" 2>/dev/null
+  pkill -u "$(id -u)" -f "$(pat "$1")" 2>/dev/null; sleep 1
+  pkill -9 -u "$(id -u)" -f "$(pat "$1")" 2>/dev/null; rm -f "$RUN/$1.pid"; true
+}
 
 case "${1:-status}" in
   start)   start_app; start_tunnel ;;
