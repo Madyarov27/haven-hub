@@ -1,6 +1,6 @@
 {
   "name": "haven-hub",
-  "version": "4.1.0",
+  "version": "4.1.1",
   "private": true,
   "type": "module",
   "description": "Team hub for Hack Club Haven organizers — runs on Google Apps Script or on your own server",

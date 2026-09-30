@@ -27,7 +27,7 @@ function fakeTelegram() {
 async function boot(extra = {}) {
   const dataDir = extra.dataDir || mkdtempSync(join(tmpdir(), 'hub-')), tg = extra.tg || fakeTelegram(), mails = [];
   const hub = await createHub({ dataDir, backupDir: join(dataDir, 'bk'), code: CODE, fetch: tg.fetchImpl, log: () => {},
-    env: { PUBLIC_URL: PUB, HUB_TZ: 'Asia/Tashkent', TG_SECRET: 'sekret', TG_PATH: 'p4th' }, mailTransport: { sendMail: async m => { mails.push(m); } } });
+    env: Object.assign({ PUBLIC_URL: PUB, HUB_TZ: 'Asia/Tashkent', TG_SECRET: 'sekret', TG_PATH: 'p4th' }, extra.env || {}), mailTransport: { sendMail: async m => { mails.push(m); } } });
   const srv = createServer(hub.handle); await new Promise(r => srv.listen(0, '127.0.0.1', r));
   const base = 'http://127.0.0.1:' + srv.address().port;
   const post = async (body, path = '/api') => (await fetch(base + path, { method: 'POST', body: JSON.stringify(body) })).json();
@@ -179,5 +179,31 @@ test('website: security headers, generated config, no path traversal, health', a
   assert.equal((await fetch(s.base + '/..%2fpackage.json')).status, 404);
   assert.equal((await fetch(s.base + '/%2e%2e/%2e%2e/package.json')).status, 404);
   assert.equal((await (await fetch(s.base + '/healthz')).json()).ok, true);
+  await s.stop();
+});
+
+test('website on GitHub Pages, server does the work: CORS for the site only, links use ?hub=name', async () => {
+  const SITE = 'https://notazizelse.github.io/haven-hub';
+  const s = await boot({ env: { SITE_URL: SITE, HUB_NAME: 'tashkent', ALLOWED_ORIGINS: 'https://notazizelse.github.io' } });
+  const ok = await fetch(s.base + '/api?action=ping', { headers: { Origin: 'https://notazizelse.github.io' } });
+  assert.equal(ok.headers.get('access-control-allow-origin'), 'https://notazizelse.github.io');
+  const bad = await fetch(s.base + '/api?action=ping', { headers: { Origin: 'https://evil.example' } });
+  assert.equal(bad.headers.get('access-control-allow-origin'), null);
+  const pre = await fetch(s.base + '/api', { method: 'OPTIONS', headers: { Origin: 'https://notazizelse.github.io', 'Access-Control-Request-Method': 'POST' } });
+  assert.equal(pre.status, 204); assert.match(pre.headers.get('access-control-allow-methods'), /POST/);
+  // import from the Google Sheet → links point at the GitHub site with ?hub=tashkent
+  const gas = createGas(); const g = loadBackend(CODE, gas);
+  const st = g.post({ action: 'setup', sheet: 'https://docs.google.com/spreadsheets/d/' + gas._ss.getId() + '/edit', name: 'Azizbek', event: { name: 'Haven Tashkent', timezone: 'Asia/Tashkent', start: '2026-11-14', end: '2026-11-15' }, starter: false });
+  const { code } = await s.hub.admin['import-code']();
+  const start = await s.post({ code, bundle: g.call('moveBundle_') }, '/admin/import');
+  const fin = await s.post({ code, importId: start.importId }, '/admin/import/finish');
+  assert.equal(fin.ok, true, fin.error); assert.equal(fin.home, SITE + '/?hub=tashkent');
+  const links = await s.hub.admin['admin-links']();
+  assert.equal(links[0].link, `${SITE}/?hub=tashkent&u=${st.key}&t=${st.token}`);
+  // the Sheet then forwards to the GitHub link
+  gas.UrlFetchApp.fetch = (url) => ({ getResponseCode: () => 200, getContentText: () => JSON.stringify(url.endsWith('/finish') ? fin : url.endsWith('/files') ? { ok: true, count: 0 } : { ok: true, importId: 'x' }) });
+  g.call('moveToServer_', PUB, 'c');
+  const moved = g.get({ action: 'me', u: st.key, t: st.token });
+  assert.equal(moved.code, 'moved'); assert.equal(moved.url, SITE + '/?hub=tashkent');
   await s.stop();
 });

@@ -5,6 +5,9 @@ import { store, browserTz } from './ui.js';
 
 const CFG = window.HUB_CONFIG || {};
 export const HUB_RE = /^AKfy[\w-]{30,}$/;
+/** Hubs that run on their own server, by short name: ?hub=tashkent → that server's /api (set in config.js). */
+const SERVERS = CFG.hubs || {};
+const isHub = id => HUB_RE.test(id) || Object.prototype.hasOwnProperty.call(SERVERS, id);
 export const params = new URLSearchParams(location.search);
 export const DEMO = params.has('demo');
 export const DEMO_HUB = 'AKfycbDEMOdemoDEMOdemoDEMOdemoDEMOdemo00000';
@@ -17,8 +20,8 @@ export function hubFrom(s) {
   s = String(s || '').trim();
   const m = s.match(/\/macros\/s\/([\w-]+)\/(exec|dev)/);
   if (m && HUB_RE.test(m[1])) return m[1];
-  try { const h = new URL(s).searchParams.get('hub'); if (h && HUB_RE.test(h)) return h; } catch (e) { /* not a URL */ }
-  return HUB_RE.test(s) ? s : '';
+  try { const h = new URL(s).searchParams.get('hub'); if (h && isHub(h)) return h; } catch (e) { /* not a URL */ }
+  return isHub(s) ? s : '';
 }
 /** A pasted personal link → { hub, u, t } (or null). */
 export function parseLink(s) {
@@ -36,7 +39,7 @@ export function resolve() {
   else if (q && hubFrom(q)) hubId = hubFrom(q);
   else if (CFG.defaultHub && HUB_RE.test(CFG.defaultHub)) hubId = CFG.defaultHub;
   else hubId = store.get('hh:last') || '';
-  if (!SELF && !HUB_RE.test(hubId)) hubId = '';
+  if (!SELF && !isHub(hubId)) hubId = '';
   if (hubId && params.get('t')) setSession({ u: params.get('u') || '', t: params.get('t') });
   if (hubId && !DEMO && !SELF) store.set('hh:last', hubId);
   // Clean address bar: keep ?hub= (so a copied URL opens the public page), drop the key.
@@ -48,7 +51,7 @@ export function resolve() {
   return hubId;
 }
 export const hub = () => hubId;
-export const urlFor = id => id === 'self' ? CFG.api : 'https://script.google.com/macros/s/' + id + '/exec';
+export const urlFor = id => id === 'self' ? CFG.api : SERVERS[id] ? SERVERS[id] : 'https://script.google.com/macros/s/' + id + '/exec';
 export const siteUrl = () => (location.origin + location.pathname).replace(/\/index\.html$/, '').replace(/\/$/, '');
 export const publicUrl = () => siteUrl() + '/' + (SELF || (CFG.defaultHub && hubId === CFG.defaultHub) ? '' : '?hub=' + hubId);
 
@@ -80,9 +83,12 @@ export async function postTo(id, action, body) {
 const withKey = o => { const s = session(); return Object.assign({}, o, s ? { u: s.u, t: s.t } : {}); };
 /** The hub moved to its own server: forward this person there, with their key. */
 export function followMove(r) {
-  if (!r || r.code !== 'moved' || !/^https:\/\/[^\s]+$/.test(String(r.url || ''))) return false;
+  if (!r || r.code !== 'moved') return false;
+  let u; try { u = new URL(String(r.url || '')); } catch (e) { return false; }
+  if (u.protocol !== 'https:') return false;
   const s = session();
-  location.replace(String(r.url).replace(/\/+$/, '') + '/' + (s ? '?u=' + encodeURIComponent(s.u) + '&t=' + encodeURIComponent(s.t) : '') + location.hash);
+  if (s) { u.searchParams.set('u', s.u); u.searchParams.set('t', s.t); }
+  location.replace(u.toString() + location.hash);
   return true;
 }
 const follow = p => p.then(r => { if (followMove(r)) return new Promise(() => {}); return r; });

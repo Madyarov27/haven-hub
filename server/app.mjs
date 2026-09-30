@@ -30,6 +30,10 @@ export async function createHub(opts = {}) {
   const mailer = createMailer({ env, transport: opts.mailTransport });
   const runtime = createRuntime({ store, filesDir, env, telegram });
   const started = Date.now();
+  // the website may live elsewhere (e.g. GitHub Pages) and call this server's /api — allow those origins
+  const origins = String(env.ALLOWED_ORIGINS || 'https://notazizelse.github.io').split(/[\s,]+/).filter(Boolean);
+  const linkBase = () => String(env.SITE_URL || env.publicUrl() || '').replace(/\/+$/, '');
+  const home = () => linkBase() + (env.HUB_NAME ? '/?hub=' + env.HUB_NAME : '');
 
   const hubServer = {
     publicUrl: () => env.publicUrl(),
@@ -104,7 +108,7 @@ export async function createHub(opts = {}) {
     if (!importOk(b.code) || !same(b.importId, store.getMeta('import_id'))) return { ok: false, error: 'Wrong import code.' };
     const res = await run(() => {
       be.call('upgrade');
-      be.call('saveSettingsRaw_', { site_url: env.publicUrl() || '', hub_id: '', moved_to: '' });
+      be.call('saveSettingsRaw_', { site_url: linkBase(), hub_id: env.HUB_NAME || '', moved_to: '' });
       be.call('refreshLinks');
       const people = be.call('activePeople_').length, tasks = be.call('rows_', 'Tasks').length;
       be.call('log_', 'system', '', 'Imported from Google Sheets', `${people} people, ${tasks} tasks`);
@@ -113,7 +117,7 @@ export async function createHub(opts = {}) {
     ['import_code', 'import_code_exp', 'import_id'].forEach(k => store.delMeta(k));
     if (store.getProp('BOT_TOKEN')) await telegram.setWebhook(store.getProp('BOT_TOKEN')).catch(e => log('webhook: ' + e.message));
     log(`import finished: ${res.people} people, ${res.tasks} tasks`);
-    return Object.assign({ ok: true }, res);
+    return Object.assign({ ok: true, home: home() }, res);
   }
 
   // ------------------------------------------------------------------ Telegram webhook
@@ -176,7 +180,7 @@ export async function createHub(opts = {}) {
     },
     async 'admin-links'() { return run(() => { be.call('resetMemo_'); return be.call('activePeople_').filter(p => be.call('isAdmin_', p)).map(p => ({ name: p.name, link: be.call('linkFor_', p) })); }); },
     async 'reset-link'(key) { return run(() => { be.call('resetMemo_'); const r = be.call('resetLink_', { name: 'server admin' }, { key }); if (!r.ok) throw new Error(r.error); return { link: r.link }; }); },
-    async 'import-code'() { const c = code24(); store.setMeta('import_code', c); store.setMeta('import_code_exp', Date.now() + 2 * 3600e3); return { code: c, validFor: '2 hours', empty: !hasPeople() }; },
+    async 'import-code'() { const c = code24(); store.setMeta('import_code', c); store.setMeta('import_code_exp', Date.now() + 2 * 3600e3); return { code: c, validFor: '2 hours', empty: !hasPeople(), server: env.publicUrl(), linksWillBe: home() }; },
     async 'setup-code'() { const c = code24(); store.setMeta('setup_code', c); store.setMeta('setup_code_exp', Date.now() + 2 * 3600e3); return { code: c, validFor: '2 hours' }; },
     async export() { return call('apiExport_'); },
     async backup() { return { file: backup() }; },
@@ -203,7 +207,10 @@ export async function createHub(opts = {}) {
 
   async function handle(req, res) {
     const url = new URL(req.url, 'http://x'), path = url.pathname, ip = String(req.headers['cf-connecting-ip'] || req.socket.remoteAddress || '');
+    const origin = String(req.headers.origin || '');
+    if (path === '/api' && origins.includes(origin)) { res.setHeader('Access-Control-Allow-Origin', origin); res.setHeader('Vary', 'Origin'); }
     try {
+      if (path === '/api' && req.method === 'OPTIONS') return send(res, 204, '', 'text/plain', { 'Access-Control-Allow-Methods': 'GET, POST', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Max-Age': '86400' });
       if (path === '/api') {
         if (req.method === 'GET') return send(res, 200, await api('GET', Object.fromEntries(url.searchParams)));
         if (req.method === 'POST') {

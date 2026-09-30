@@ -13,7 +13,7 @@ const HOME = argHome > 0 ? resolve(process.argv[argHome + 1]) : process.env.HAVE
 const envFile = process.env.HAVEN_ENV || join(HOME, '.env');
 const env = {};
 if (existsSync(envFile)) readFileSync(envFile, 'utf8').split(/\r?\n/).forEach(l => { const m = l.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/); if (m) env[m[1]] = m[2].replace(/^(['"])(.*)\1$/, '$2'); });
-Object.keys(process.env).forEach(k => { if (/^(PUBLIC_URL|PORT|HOST|SMTP_|MAIL_|HUB_TZ|OWNER_EMAIL|TG_|DATA_DIR|BACKUP_DIR)/.test(k)) env[k] = process.env[k]; });
+Object.keys(process.env).forEach(k => { if (/^(PUBLIC_URL|SITE_URL|HUB_NAME|ALLOWED_ORIGINS|PORT|HOST|SMTP_|MAIL_|HUB_TZ|OWNER_EMAIL|TG_|DATA_DIR|BACKUP_DIR)/.test(k)) env[k] = process.env[k]; });
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 const dataDir = resolve(env.DATA_DIR || join(HOME, 'data'));
 env.PUBLIC_URL_FILE = join(HOME, 'run', 'public_url'); // written by "hubctl quick-tunnel" while testing without a domain

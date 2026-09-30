@@ -15,11 +15,12 @@
  * The URL stays the same. Secrets never go in this file: personal tokens live in the Sheet, the bot token in Script properties.
  */
 
-const HUB_VERSION = '4.1.0';
+const HUB_VERSION = '4.1.1';
 // On your own server (server/index.mjs) this same file runs on Node; HUB_SERVER is then provided by the server.
 const SELF_HOSTED = typeof HUB_SERVER !== 'undefined' && !!HUB_SERVER;
 const DEFAULT_SITE = 'https://notazizelse.github.io/haven-hub';
 const HUB_RE = /^AKfy[\w-]{30,}$/;
+const HUB_NAME_RE = /^[a-z][a-z0-9-]{1,30}$/; // short hub name on the shared website (a hub that runs on its own server)
 
 // Column order = v3 order + new columns at the end, so older sheets upgrade in place. Code reads and writes by header NAME.
 const TABS = {
@@ -531,7 +532,7 @@ function uploadProof_(me, b) {
   } catch (err) { botLog_('upload', String(err)); return { ok: false, error: 'Could not save the file: ' + String(err).slice(0, 80) }; }
 }
 /** Link written into the proof text. The website finds files by the "/file/d/<id>" part, on Google Drive and on the server alike. */
-function fileUrl_(id) { return SELF_HOSTED ? site_() + '/file/d/' + id : 'https://drive.google.com/file/d/' + id + '/view'; }
+function fileUrl_(id) { return SELF_HOSTED ? (HUB_SERVER.publicUrl() || site_()) + '/file/d/' + id : 'https://drive.google.com/file/d/' + id + '/view'; }
 function photoOut_(me, id) {
   try {
     const f = DriveApp.getFileById(id), parts = String(f.getDescription() || '').split('|');
@@ -719,7 +720,7 @@ function saveSettings_(me, b) {
     if (k === 'reminder_hour') { const h = parseInt(val, 10); if (!(h >= 0 && h <= 23)) errs.push('Reminder hour must be 0–23.'); else val = String(h); }
     if (URL_KEYS.indexOf(k) >= 0 && val && !isUrl_(val)) errs.push(`${k.replace(/_/g, ' ')} must be a full link starting with https://`);
     if (k === 'city_email' && val && !isEmail_(val)) errs.push('Public email looks wrong.');
-    if (k === 'hub_id' && val && !HUB_RE.test(val)) errs.push('Hub ID looks wrong (it starts with AKfy).');
+    if (k === 'hub_id' && val && !HUB_RE.test(val) && !HUB_NAME_RE.test(val)) errs.push('Hub ID looks wrong (AKfy… or a short name like tashkent).');
     if (k === 'site_url') val = val.replace(/\/+$/, '');
     out[k] = val;
   });
@@ -1060,9 +1061,10 @@ function moveToServer_(server, code) {
   }
   const done = post('/admin/import/finish', { code: code, importId: start.importId });
   // Switch this Sheet off: every link now forwards to the server, and the old timers stop (the old bot poller would fight the server's webhook).
-  saveSettingsRaw_({ moved_to: server });
+  const home = /^https:\/\/\S+$/.test(String(done.home || '')) ? done.home : server; // where people open the hub now (e.g. the shared website with ?hub=name)
+  saveSettingsRaw_({ moved_to: home });
   ScriptApp.getProjectTriggers().forEach(t => { if (['pollTelegram', 'eveningReminders', 'weeklyReport'].indexOf(t.getHandlerFunction()) >= 0) ScriptApp.deleteTrigger(t); });
-  const msg = `Moved to ${server}: ${done.people} people, ${done.tasks} tasks, ${files} proof files${done.bot ? ', Telegram bot @' + done.bot : ''}.\n` +
+  const msg = `Moved to ${home}: ${done.people} people, ${done.tasks} tasks, ${files} proof files${done.bot ? ', Telegram bot @' + done.bot : ''}.\n` +
     `This Sheet is now a frozen backup and every old link forwards to the server.\nTo undo: clear moved_to in the Settings tab, then Haven Hub → Turn on reminders.`;
   log_('system', '', 'Moved to server', server); report_('Moved to server', msg);
   return msg;

@@ -6,6 +6,9 @@ window.HUB_CONFIG = {
   // Maintainers: the "Make a copy" link of the public template Sheet (…/spreadsheets/d/<id>/copy).
   templateSheet: '',
   repo: 'https://github.com/notazizelse/haven-hub',
+  // Hubs that run on their own server (server/ in this repo), by short name → their API address.
+  // Links then look like https://notazizelse.github.io/haven-hub/?hub=tashkent&u=…&t=…
+  hubs: {},
   // The newest backend (Code.gs) version. Admins running an older one see an "update available" banner.
-  latestBackend: '4.1.0',
+  latestBackend: '4.1.1',
 };

@@ -3,10 +3,12 @@
 #   hubctl start | stop | restart | status | logs [tunnel] | ensure | deploy | quick-tunnel | tunnel-start | tunnel-stop | install-cron
 #   hubctl set-secret NAME          ask for a secret (hidden) and save it in ~/haven/.env — e.g. SMTP_PASS
 #   hubctl cf-login | cf-tunnel DOMAIN   put the hub on your domain with a Cloudflare named tunnel (no token copying)
+#   hubctl ts-install | ts-login | ts-funnel   no domain? a free permanent https://NAME.TAILNET.ts.net address (Tailscale Funnel, no root)
 #   hubctl admin-links | reset-link KEY | import-code | setup-code | backup | export | set-webhook | remind | weekly-report
 set -uo pipefail
 H="${HAVEN_HOME:-$HOME/haven}"
 NODE="$H/node/bin/node"; APP="$H/app"; RUN="$H/run"; LOGS="$H/logs"; CF="$H/bin/cloudflared"
+TS="$H/bin/tailscale"; TSD="$H/bin/tailscaled"; TSSOCK="$RUN/tailscaled.sock"
 mkdir -p "$RUN" "$LOGS" "$H/data" "$H/backups"; chmod 700 "$H"
 [ -f "$H/.env" ] && { set -a; . "$H/.env"; set +a; }
 PORT="${PORT:-8787}"
@@ -33,6 +35,16 @@ start_tunnel() {
     echo "tunnel started"
   elif [ "${QUICK_TUNNEL:-}" = "1" ]; then quick_tunnel; fi
 }
+# Tailscale in user-space mode: no root, no network changes on the server — it only serves the hub's port over Funnel
+ts() { "$TS" --socket="$TSSOCK" "$@"; }
+start_ts() {
+  [ "${TAILSCALE:-}" = "1" ] && [ -x "$TSD" ] || return 0
+  alive tailscaled && return 0
+  mkdir -p "$H/data/tailscale"
+  ( exec setsid "$TSD" --tun=userspace-networking --socket="$TSSOCK" --statedir="$H/data/tailscale" --port=0 </dev/null >>"$LOGS/tailscaled.log" 2>&1 ) &
+  echo $! >"$RUN/tailscaled.pid"; sleep 2
+  alive tailscaled && echo "tailscale started" || echo "tailscale failed to start — hubctl logs tailscaled"
+}
 quick_tunnel() {
   alive tunnel && { echo "tunnel already running: $(cat "$RUN/public_url" 2>/dev/null)"; return 0; }
   : >"$LOGS/tunnel.log"
@@ -48,7 +60,7 @@ quick_tunnel() {
 # write KEY=VALUE into ~/haven/.env (keeps it private: 600)
 set_env() { local tmp; tmp=$(mktemp "$H/.env.XXXXXX"); { grep -v "^$1=" "$H/.env" 2>/dev/null || true; printf '%s=%s\n' "$1" "$2"; } >"$tmp"; chmod 600 "$tmp"; mv -f "$tmp" "$H/.env"; }
 # stop by pid file, and also by exact command path (in case a pid file went stale) — only this user's processes
-pat() { [ "$1" = app ] && echo "$APP/server/index.mjs" || echo "$CF tunnel"; }
+pat() { case "$1" in app) echo "$APP/server/index.mjs" ;; tailscaled) echo "$TSD --tun" ;; *) echo "$CF tunnel" ;; esac; }
 stop_one() {
   alive "$1" && kill "$(cat "$RUN/$1.pid")" 2>/dev/null
   pkill -u "$(id -u)" -f "$(pat "$1")" 2>/dev/null; sleep 1
@@ -56,12 +68,13 @@ stop_one() {
 }
 
 case "${1:-status}" in
-  start)   start_app; start_tunnel ;;
-  stop)    stop_one tunnel; stop_one app; echo stopped ;;
+  start)   start_app; start_tunnel; start_ts ;;
+  stop)    stop_one tunnel; stop_one tailscaled; stop_one app; echo stopped ;;
   restart) stop_one app; start_app ;;
   ensure)  rotate; alive app || { echo "$(date -Is) ensure: app was down, starting" >>"$LOGS/app.log"; start_app; }
-           { [ -n "${CF_TUNNEL_CONFIG:-}" ] || [ -n "${CF_TUNNEL_TOKEN:-}" ] || [ "${QUICK_TUNNEL:-}" = "1" ]; } && ! alive tunnel && start_tunnel; true ;;
-  status)  for p in app tunnel; do alive $p && echo "$p: running (pid $(cat "$RUN/$p.pid"))" || echo "$p: stopped"; done
+           { [ -n "${CF_TUNNEL_CONFIG:-}" ] || [ -n "${CF_TUNNEL_TOKEN:-}" ] || [ "${QUICK_TUNNEL:-}" = "1" ]; } && ! alive tunnel && start_tunnel
+           [ "${TAILSCALE:-}" = "1" ] && ! alive tailscaled && start_ts; true ;;
+  status)  for p in app tunnel tailscaled; do alive $p && echo "$p: running (pid $(cat "$RUN/$p.pid"))" || echo "$p: stopped"; done
            curl -s -m 5 "http://127.0.0.1:$PORT/healthz" && echo; alive app && "$NODE" "$APP/server/cli.mjs" status ;;
   logs)    tail -n 80 -f "$LOGS/${2:-app}.log" ;;
   quick-tunnel) quick_tunnel ;;
@@ -102,6 +115,29 @@ YML
     set_env CF_TUNNEL_CONFIG "$H/cloudflared.yml"; set_env PUBLIC_URL "https://$d"; set_env QUICK_TUNNEL ""
     stop_one tunnel; rm -f "$RUN/public_url"; stop_one app; start_app; CF_TUNNEL_CONFIG="$H/cloudflared.yml" start_tunnel
     echo "tunnel $id → https://$d (DNS can take a few minutes)" ;;
+  ts-install)
+    v=$(curl -fsSL "https://pkgs.tailscale.com/stable/?mode=json" | "$NODE" -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>console.log(JSON.parse(s).TarballsVersion))')
+    [ -n "$v" ] || { echo "could not find the Tailscale version"; exit 1; }
+    tmp=$(mktemp -d); curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_${v}_amd64.tgz" | tar -xz -C "$tmp"
+    cp "$tmp"/tailscale_*/tailscale "$tmp"/tailscale_*/tailscaled "$H/bin/" && chmod +x "$TS" "$TSD"; rm -rf "$tmp"
+    "$TS" version | head -1 ;;
+  ts-login)
+    # prints a link: open it, sign in to Tailscale, and connect this server
+    set_env TAILSCALE 1; TAILSCALE=1 start_ts
+    ts status >/dev/null 2>&1 && { echo "already connected: $(ts status --json | "$NODE" -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>console.log(JSON.parse(s).Self.DNSName))')"; exit 0; }
+    : >"$LOGS/tailscale-up.log"
+    ( exec setsid "$TS" --socket="$TSSOCK" up --hostname="${TS_HOSTNAME:-haven-hub}" </dev/null >>"$LOGS/tailscale-up.log" 2>&1 ) &
+    for i in $(seq 1 20); do u=$(grep -o 'https://login.tailscale.com/[^ ]*' "$LOGS/tailscale-up.log" | head -1); [ -n "$u" ] && { echo "Open this link and connect the server: $u"; exit 0; }; sleep 1; done
+    echo "no login link yet — hubctl logs tailscale-up" ;;
+  ts-funnel)
+    # share the hub's port on https://NAME.TAILNET.ts.net (may print a link to switch Funnel on for your tailnet first)
+    name=$(ts status --json | "$NODE" -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>console.log(String(JSON.parse(s).Self.DNSName||"").replace(/\.$/,"")))')
+    [ -n "$name" ] || { echo "not connected — run: hubctl ts-login"; exit 1; }
+    timeout 25 "$TS" --socket="$TSSOCK" funnel --bg "$PORT" </dev/null 2>&1 | tail -5
+    ts funnel status 2>/dev/null | grep -q "https://$name" || { echo "Funnel is not on yet (open the link above if there is one, then run this again)"; exit 1; }
+    set_env PUBLIC_URL "https://$name"; set_env QUICK_TUNNEL ""
+    stop_one app; start_app
+    echo "the hub is reachable at https://$name" ;;
   install-cron)
     ( crontab -l 2>/dev/null | grep -v 'haven/hubctl\|hubctl ensure\|hubctl start'
       echo "@reboot $H/hubctl start >/dev/null 2>&1"
