@@ -134,7 +134,7 @@ YML
     name=$(ts status --json | "$NODE" -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>console.log(String(JSON.parse(s).Self.DNSName||"").replace(/\.$/,"")))')
     [ -n "$name" ] || { echo "not connected — run: hubctl ts-login"; exit 1; }
     timeout 25 "$TS" --socket="$TSSOCK" funnel --bg "$PORT" </dev/null 2>&1 | tail -5
-    ts funnel status 2>/dev/null | grep -q "https://$name" || { echo "Funnel is not on yet (open the link above if there is one, then run this again)"; exit 1; }
+    ts funnel status 2>&1 | grep -q "https://$name" || { echo "Funnel is not on yet (open the link above if there is one, then run this again)"; exit 1; }
     set_env PUBLIC_URL "https://$name"; set_env QUICK_TUNNEL ""
     stop_one app; start_app
     echo "the hub is reachable at https://$name" ;;
