@@ -3,7 +3,9 @@
    Personal links (?u=&t=) are stored per hub and then removed from the address bar, so a copied URL never leaks a key. */
 import { store, browserTz } from './ui.js';
 
-const CFG = window.HUB_CONFIG || {};
+/** release.js (owned by the Haven Hub repo) + config.js (yours: anything set there wins). */
+export const CFG = Object.assign({}, window.HUB_RELEASE || {}, ...Object.entries(window.HUB_CONFIG || {}).filter(([, v]) => v !== '' && v != null).map(([k, v]) => ({ [k]: v })));
+const REDIRECTS = CFG.redirects || {};
 export const HUB_RE = /^AKfy[\w-]{30,}$/;
 /** Hubs that run on their own server, by short name: ?hub=tashkent → that server's /api (set in config.js). */
 const SERVERS = CFG.hubs || {};
@@ -32,14 +34,43 @@ export function parseLink(s) {
   } catch (e) { return null; }
 }
 
+let leaving = false;
+/** True while the page is being sent to the hub's new address (stop rendering). */
+export const redirecting = () => leaving;
+/** ?hub=<name> (or the hub this browser remembers) moved to its own address: go there, taking the sign-in along after # (never sent to any server). */
+function redirectMoved(q) {
+  const name = !DEMO && !SELF && [q, !q && store.get('hh:last')].find(n => n && Object.prototype.hasOwnProperty.call(REDIRECTS, n));
+  if (!name) return false;
+  let target; try { target = new URL(REDIRECTS[name]); } catch (e) { return false; }
+  if (target.protocol !== 'https:') return false;
+  const s = params.get('t') ? { u: params.get('u') || '', t: params.get('t') } : store.json('hh:s:' + name, null);
+  const r = location.hash.replace(/^#\/?/, '').split('?')[0];
+  const h = new URLSearchParams(Object.assign(s && s.t ? { u: s.u || '', t: s.t } : {}, r ? { r } : {}));
+  ['hh:s:', 'hh:c:'].forEach(k => store.del(k + name));
+  if (store.get('hh:last') === name) store.del('hh:last');
+  leaving = true;
+  location.replace(target.origin + target.pathname.replace(/\/?$/, '/') + (String(h) ? '#/handoff?' + h : ''));
+  return true;
+}
+/** Arrived from an old link of a hub that moved here: #/handoff?u=…&t=…&r=<page> → sign in on this site. */
+function takeHandoff() {
+  const m = location.hash.match(/^#\/handoff\?(.*)$/);
+  if (!m) return;
+  const h = new URLSearchParams(m[1]), r = (h.get('r') || '').replace(/[^\w/-]/g, '');
+  if (h.get('t')) setSession({ u: h.get('u') || '', t: h.get('t') });
+  history.replaceState(null, '', location.pathname + location.search + '#/' + (r === 'handoff' ? '' : r));
+}
+
 export function resolve() {
   const q = params.get('hub') || params.get('api');
+  if (redirectMoved(q)) return '';
   if (DEMO) hubId = DEMO_HUB;
   else if (SELF) hubId = 'self';
   else if (q && hubFrom(q)) hubId = hubFrom(q);
   else if (CFG.defaultHub && HUB_RE.test(CFG.defaultHub)) hubId = CFG.defaultHub;
   else hubId = store.get('hh:last') || '';
   if (!SELF && !isHub(hubId)) hubId = '';
+  if (hubId) takeHandoff();
   if (hubId && params.get('t')) setSession({ u: params.get('u') || '', t: params.get('t') });
   if (hubId && !DEMO && !SELF) store.set('hh:last', hubId);
   // Clean address bar: keep ?hub= (so a copied URL opens the public page), drop the key.

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createServer } from 'node:http';
+import { createServer, request } from 'node:http';
 import { createHub } from '../server/app.mjs';
 import { createGas, loadBackend } from '../dev/gas-fakes.js';
 
@@ -205,6 +205,30 @@ test('website on GitHub Pages, server does the work: CORS for the site only, lin
   g.call('moveToServer_', PUB, 'c');
   const moved = g.get({ action: 'me', u: st.key, t: st.token });
   assert.equal(moved.code, 'moved'); assert.equal(moved.url, SITE + '/?hub=tashkent');
+  await s.stop();
+});
+
+test('moving a hub from the shared site to its own domain: set-setting rebuilds links, www goes to the domain', async () => {
+  const SITE = 'https://notazizelse.github.io/haven-hub';
+  const s = await boot({ env: { SITE_URL: SITE, HUB_NAME: 'tashkent', ALLOWED_ORIGINS: 'https://notazizelse.github.io' } });
+  const gas = createGas(); const g = loadBackend(CODE, gas);
+  const st = g.post({ action: 'setup', sheet: 'https://docs.google.com/spreadsheets/d/' + gas._ss.getId() + '/edit', name: 'Ada', event: { name: 'Haven Test', timezone: 'Asia/Tashkent', start: '2026-11-14', end: '2026-11-15' }, starter: false });
+  const { code } = await s.hub.admin['import-code']();
+  const start = await s.post({ code, bundle: g.call('moveBundle_') }, '/admin/import');
+  assert.equal((await s.post({ code, importId: start.importId }, '/admin/import/finish')).ok, true);
+  assert.equal((await s.hub.admin['admin-links']())[0].link, `${SITE}/?hub=tashkent&u=${st.key}&t=${st.token}`);
+  // the cutover: the hub's own address, no ?hub= any more — the same keys keep working
+  assert.deepEqual(await s.hub.admin['set-setting']('site_url', PUB + '/'), { site_url: PUB });
+  assert.deepEqual(await s.hub.admin['set-setting']('hub_id', ''), { hub_id: '' });
+  assert.equal((await s.hub.admin['admin-links']())[0].link, `${PUB}/?u=${st.key}&t=${st.token}`);
+  assert.equal((await s.get({ action: 'me', u: st.key, t: st.token })).ok, true);
+  await assert.rejects(s.hub.admin['set-setting']('site_url', 'http://plain.example'), /https/);
+  await assert.rejects(s.hub.admin['set-setting']('nope', 'x'), /Unknown setting/);
+  // www.<domain> → <domain>, keeping the path and the #… part stays in the browser
+  const w = await new Promise((ok, bad) => request(s.base + '/?u=a&t=b', { headers: { Host: 'www.hub.example.xyz' } }, r => { r.resume(); ok(r); }).on('error', bad).end());
+  try { assert.equal(w.statusCode, 301); assert.equal(w.headers.location, PUB + '/?u=a&t=b'); } catch (e) { await s.stop(); throw e; }
+  assert.equal((await fetch(s.base + '/', { redirect: 'manual' })).status, 200);
+  assert.match(await (await fetch(s.base + '/release.js')).text(), /redirects/);
   await s.stop();
 });
 

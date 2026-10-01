@@ -4,7 +4,7 @@
 #   hubctl set-secret NAME          ask for a secret (hidden) and save it in ~/haven/.env — e.g. SMTP_PASS
 #   hubctl cf-login | cf-tunnel DOMAIN   put the hub on your domain with a Cloudflare named tunnel (no token copying)
 #   hubctl ts-install | ts-login | ts-funnel   no domain? a free permanent https://NAME.TAILNET.ts.net address (Tailscale Funnel, no root)
-#   hubctl admin-links | reset-link KEY | import-code | setup-code | backup | export | set-webhook | remind | weekly-report
+#   hubctl admin-links | reset-link KEY | set-setting KEY VALUE | import-code | setup-code | backup | export | set-webhook | remind | weekly-report
 set -uo pipefail
 H="${HAVEN_HOME:-$HOME/haven}"
 NODE="$H/node/bin/node"; APP="$H/app"; RUN="$H/run"; LOGS="$H/logs"; CF="$H/bin/cloudflared"

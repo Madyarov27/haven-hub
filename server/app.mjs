@@ -259,6 +259,20 @@ export async function createHub(opts = {}) {
     async export() { return call('apiExport_'); },
     async backup() { return { file: backup() }; },
     async 'set-webhook'() { return telegram.setWebhook(store.getProp('BOT_TOKEN')); },
+    /** One setting (as in Dashboard → Settings, plus site_url / hub_id), then personal links are rebuilt. */
+    async 'set-setting'(key, value = '') {
+      key = String(key || ''); value = String(value);
+      return run(() => {
+        be.call('resetMemo_');
+        const known = be.call('__eval', 'SETTINGS').some(d => d[0] === key);
+        if (!known) throw new Error('Unknown setting: ' + key);
+        if (/_url$/.test(key) && value && !/^https:\/\/[^\s<>"']+$/.test(value)) throw new Error(key + ' must start with https://');
+        be.call('saveSettingsRaw_', { [key]: value.replace(/\/+$/, '') });
+        be.call('refreshLinks');
+        be.call('log_', 'server admin', '', 'Setting changed', key + ' = ' + value);
+        return { [key]: be.call('S_')[key] };
+      });
+    },
     async 'notify-admins'(text) { return run(() => { be.call('resetMemo_'); const to = be.call('activePeople_').filter(p => be.call('isAdmin_', p) && p.chat_id); to.forEach(p => be.call('tg_', p.chat_id, text)); return to.length; }); },
     async remind() { return call('eveningReminders'); },
     async 'weekly-report'() { return call('weeklyReport'); },
@@ -286,6 +300,9 @@ export async function createHub(opts = {}) {
   async function handle(req, res) {
     const url = new URL(req.url, 'http://x'), path = url.pathname, ip = clientIp(req);
     const origin = String(req.headers.origin || '');
+    // www.yourdomain → yourdomain (one address, so a sign-in saved in the browser is always found)
+    const host = String(req.headers.host || '').toLowerCase(), pub = env.publicUrl();
+    if (host.startsWith('www.') && pub && new URL(pub).host === host.slice(4) && (req.method === 'GET' || req.method === 'HEAD')) return send(res, 301, '', 'text/plain', { Location: pub + req.url, 'Cache-Control': 'public, max-age=3600' });
     if (path === '/api' && origins.includes(origin)) { res.setHeader('Access-Control-Allow-Origin', origin); res.setHeader('Vary', 'Origin'); }
     try {
       if (path === '/api' && req.method === 'OPTIONS') return send(res, 204, '', 'text/plain', { 'Access-Control-Allow-Methods': 'GET, POST', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Max-Age': '86400' });

@@ -14,7 +14,7 @@ import { applications } from './views/admin-applications.js';
 import { content } from './views/admin-content.js';
 import { settings } from './views/admin-settings.js';
 
-const CFG = window.HUB_CONFIG || {};
+const CFG = api.CFG;
 const root = $('#root');
 const ALL = ['admin', 'lead', 'member', 'viewer'], DOERS = ['admin', 'lead', 'member'], LEADS = ['admin', 'lead'];
 const NAV = [
@@ -68,6 +68,7 @@ async function boot() {
   window.addEventListener('focus', () => { if (ctx.D && Date.now() - ctx.loadedAt > 60e3) load({ silent: true }); });
   try { await api.ready(); } catch (e) { root.innerHTML = `<div class="boot">Demo mode needs the repo root served (npx serve .) — ${esc(e.message)}</div>`; return; }
   api.resolve();
+  if (api.redirecting()) { root.innerHTML = '<div class="boot">This hub moved to its own address — taking you there…</div>'; return; }
   if (api.hub() && api.session()) ctx.D = api.cached();
   render(); // with no data yet, render() starts the load itself
   if (ctx.D) await load({ silent: true });
