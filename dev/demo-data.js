@@ -22,15 +22,23 @@ export function seed(be, gas, hub) {
     jonas: person({ name: 'Jonas Weber', role: 'Operations', area: 'Operations', email: 'jonas@example.com', one: 'Food, printing, power, tables, signs.' }),
     rivera: person({ name: 'Ms. Rivera', role: 'HQ Engagement Manager (guest)', access: 'viewer' }),
   };
+  // Files: a few links (Canva, Figma, Sheets, Docs) + a made-up team files repo (its file list is TREE below)
+  ok(as(admin, { action: 'settings.save', values: { files_repo: 'haven-springfield/team-files' } }), 'files repo');
+  ok(as(admin, { action: 'resource.save', resources: [
+    { id: 'poster-canva', title: 'Launch poster — Canva', url: 'https://www.canva.com/', section: 'Posters and flyers', note: 'Change the date and the QR code, then Share → Download → PNG.' },
+    { id: 'brand-guide', title: 'Haven brand guide (HQ)', url: 'https://www.figma.com/design/V1S8l3ju7K75ABGowht1gj/-PUBLIC--Haven-Brand-Guide', section: 'Brand kit' },
+    { id: 'school-list', title: 'Schools tracker', url: 'https://docs.google.com/spreadsheets/d/demo-schools/edit', section: 'Trackers', private: true, note: 'Teacher names and numbers — team only.' },
+    { id: 'post-ideas', title: 'Post ideas + captions', url: 'https://docs.google.com/document/d/demo-posts/edit', section: 'Social media' },
+    { id: 'reel-howto', title: 'How we film a 15-second reel', url: 'https://www.youtube.com/', section: 'Social media' }] }), 'links');
   const add = (title, owner, due, extra) => ok(as(admin, { action: 'task.add', task: Object.assign({ title, owner, due, mins: 45 }, extra || {}) }), title).task.id;
   const T = {
-    poster: add('Put up 3 posters at Springfield High', 'lina', day(-4), { area: 'Design', steps: ['Print 3 posters (Design folder)', 'Ask the IT teacher where to hang them', 'Photo of each poster'], done_when: '3 photos of the posters on the wall', why: 'Posters in schools bring the most signups.' }),
-    badges: add('Design name badges', 'lina', day(9), { area: 'Design', mins: 120 }),
-    school1: add('Call the IT teacher at Westside School', 'theo', day(-2), { area: 'Outreach', steps: ['Find the number on the school list', 'Call before 15:00', 'Ask for 10 minutes with one class'], done_when: 'Teacher name + date of the class visit', ask: 'Maya — school list' }),
+    poster: add('Put up 3 posters at Springfield High', 'lina', day(-4), { area: 'Design', resources: ['poster-canva', 'gh:posters-and-flyers/'], steps: ['Print 3 posters (Design folder)', 'Ask the IT teacher where to hang them', 'Photo of each poster'], done_when: '3 photos of the posters on the wall', why: 'Posters in schools bring the most signups.' }),
+    badges: add('Design name badges', 'lina', day(9), { area: 'Design', mins: 120, resources: ['brand-guide', 'gh:brand-kit/logos/logo-orange.png', 'gh:brand-kit/fonts/'] }),
+    school1: add('Call the IT teacher at Westside School', 'theo', day(-2), { area: 'Outreach', resources: ['school-list', 'gh:schools-and-outreach/class-talk-10-min.pptx'], steps: ['Find the number on the school list', 'Call before 15:00', 'Ask for 10 minutes with one class'], done_when: 'Teacher name + date of the class visit', ask: 'Maya — school list' }),
     school2: add('Visit Lincoln Middle School — 10-minute class talk', 'theo', day(3), { area: 'Outreach', mins: 90 }),
     school3: add('Email the info sheet to 5 teachers', 'theo', day(6), { area: 'Outreach' }),
     post1: add('Post the launch reel', 'priya', day(-6), { area: 'Growth', done_when: 'Link to the post' }),
-    post2: add('Post "meet the mentors" carousel', 'priya', day(2), { area: 'Growth' }),
+    post2: add('Post "meet the mentors" carousel', 'priya', day(2), { area: 'Growth', resources: ['post-ideas', 'gh:social-media/'] }),
     post3: add('Film 3 short clips at the workshop test run', 'priya', day(12), { area: 'Growth', mins: 90 }),
     app: add('Build the check-in page', 'sam', day(5), { area: 'Tech', mins: 240, links: 'Spec | https://example.com/spec' }),
     checker: add('Test the itch.io link checker on 10 games', 'sam', day(20), { area: 'Tech', mins: 60 }),
@@ -79,6 +87,16 @@ export function seed(be, gas, hub) {
   be.post({ action: 'apply', name: 'Mr. Alvarez', contact: 'alvarez@example.com', age_group: '19+', interest: 'Mentoring (19+)', note: 'CS teacher, happy to mentor on Saturday.' });
   return { admin, lead: P.omar, member: P.lina, viewer: P.rivera, theo: P.theo };
 }
+
+/** The made-up team files repo (path, bytes). Pictures that exist in docs/assets show for real in the demo. */
+export const TREE = [
+  ['README.md', 1200], ['brand-kit/logos/logo-orange.png', 40210], ['brand-kit/logos/logo-white.png', 38900], ['brand-kit/daven/daven.png', 52000], ['brand-kit/daven/daven-sketch.png', 61000],
+  ['brand-kit/fonts/DarumadropOne-Regular.ttf', 98000], ['brand-kit/fonts/Nunito-Black.ttf', 130000], ['posters-and-flyers/poster-feed-1080x1350.png', 640000], ['posters-and-flyers/flyer-a4.pdf', 1300000],
+  ['social-media/launch-post.docx', 18000], ['social-media/hello-card.jpg', 230000], ['schools-and-outreach/class-talk-10-min.pptx', 2400000], ['schools-and-outreach/what-is-hack-club.pdf', 410000],
+];
+const ASSET = { 'logo-orange.png': 'assets/logo-orange.png', 'logo-white.png': 'assets/logo-white.png', 'daven.png': 'assets/daven.png', 'daven-sketch.png': 'assets/daven-sketch.png', 'poster-feed-1080x1350.png': 'assets/hero.jpg', 'hello-card.jpg': 'assets/hero.jpg' };
+/** Demo only: where a picture of the made-up repo really is. */
+export const rawFor = path => ASSET[String(path).split('/').pop()] || '';
 
 /** A little "poster on a wall" picture for the demo proof (browser only). */
 function poster() {

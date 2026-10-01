@@ -15,28 +15,32 @@
  * The URL stays the same. Secrets never go in this file: personal tokens live in the Sheet, the bot token in Script properties.
  */
 
-const HUB_VERSION = '4.2.0';
+const HUB_VERSION = '4.3.0';
 // On your own server (server/index.mjs) this same file runs on Node; HUB_SERVER is then provided by the server.
 const SELF_HOSTED = typeof HUB_SERVER !== 'undefined' && !!HUB_SERVER;
 const DEFAULT_SITE = 'https://notazizelse.github.io/haven-hub';
 const HUB_RE = /^AKfy[\w-]{30,}$/;
 const HUB_NAME_RE = /^[a-z][a-z0-9-]{1,30}$/; // short hub name on the shared website (a hub that runs on its own server)
+const REPO_RE = /^[\w.-]{1,39}\/[\w.-]{1,100}$/; // a GitHub repo, owner/name
 
 // Column order = v3 order + new columns at the end, so older sheets upgrade in place. Code reads and writes by header NAME.
 const TABS = {
   Settings: ['key', 'value', 'note'],
   People: ['key', 'name', 'role', 'area', 'handle', 'token', 'is_lead', 'chat_id', 'active', 'backup', 'works', 'weekend', 'one', 'ask', 'email', 'access', 'notify', 'joined_at'],
-  Tasks: ['id', 'owner', 'title', 'due', 'mins', 'why', 'steps', 'done_when', 'links', 'ask', 'status', 'proof', 'blocked_reason', 'started_at', 'done_at', 'updated_at', 'area', 'review', 'reviewed_by', 'created_by'],
+  Tasks: ['id', 'owner', 'title', 'due', 'mins', 'why', 'steps', 'done_when', 'links', 'ask', 'status', 'proof', 'blocked_reason', 'started_at', 'done_at', 'updated_at', 'area', 'review', 'reviewed_by', 'created_by', 'resources'],
   Log: ['time', 'who', 'task', 'action', 'note'],
   Meetings: ['date', 'time', 'where', 'what'],
   Rules: ['title', 'text'],
   Milestones: ['date', 'label', 'kind', 'public', 'done'],
   Applications: ['id', 'time', 'name', 'contact', 'age_group', 'interest', 'note', 'status', 'handled_by'],
   Sponsors: ['name', 'logo_url', 'link', 'note'],
+  Resources: ['id', 'title', 'url', 'kind', 'section', 'private', 'thumb', 'note', 'order', 'added_by', 'added_at'],
   Links: ['name', 'access', 'personal_link', 'telegram_connected', 'message_to_send'],
   Report: ['time', 'what', 'detail'],
 };
 const STATUSES = ['Not started', 'In progress', 'Blocked', 'Done', 'Dropped'];
+/** What this backend can do. The website shows a feature only when the hub lists it (Apps Script hubs update Code.gs when they get round to it). */
+const FEATURES = ['files'];
 const ACCESS = ['admin', 'lead', 'member', 'viewer'];
 const RANK = { viewer: 0, member: 1, lead: 2, admin: 3 };
 const NEED = { any: 0, member: 1, lead: 2, admin: 3 };
@@ -71,6 +75,8 @@ const SETTINGS = [
   ['join_form', 'yes', 'Public "Join the team" form'],
   ['join_intro', 'We need help with design, social media, outreach, tech and the event weekend. No experience needed.', 'Text above the join form'],
   ['moved_to', '', 'Set when the hub moved to its own server: every request is sent to this address. Clear it to switch this Sheet back on'],
+  ['files_repo', '', 'Public GitHub repo with your team files (posters, logos, slides), as owner/repo — shown on the Files page'],
+  ['files_branch', 'main', 'Branch of that repo'],
 ];
 const YESNO = ['weekly_report', 'email_reminders', 'done_alerts', 'group_done_posts', 'change_alerts', 'public_page', 'public_show_progress', 'public_show_team', 'join_form'];
 const URL_KEYS = ['site_url', 'signup_url', 'instagram', 'telegram_channel', 'website', 'moved_to'];
@@ -334,7 +340,8 @@ function taskOut_(t) {
     steps: t.steps ? String(t.steps).split('\n').filter(Boolean) : [], done_when: t.done_when,
     links: t.links ? String(t.links).split('\n').filter(Boolean).map(l => { const i = l.indexOf(' | '); return i > 0 ? { label: l.slice(0, i), url: l.slice(i + 3) } : { label: l, url: l }; }) : [],
     ask: t.ask, status: t.status || 'Not started', proof: t.proof, blocked_reason: t.blocked_reason, review: t.review || '', reviewed_by: t.reviewed_by || '',
-    started_at: t.started_at, done_at: t.done_at, updated_at: t.updated_at, created_by: t.created_by || '' };
+    started_at: t.started_at, done_at: t.done_at, updated_at: t.updated_at, created_by: t.created_by || '',
+    resources: t.resources ? String(t.resources).split('\n').filter(Boolean).map(refOut_).filter(Boolean) : [] };
 }
 function nextNum_() { return rows_('Tasks').reduce((m, t) => { const x = String(t.id).match(/^T(\d+)$/); return x ? Math.max(m, Number(x[1])) : m; }, 0) + 1; }
 function idFor_(n) { return 'T' + (n < 1000 ? ('00' + n).slice(-3) : String(n)); }
@@ -357,6 +364,7 @@ function taskFields_(x, t, errs, isNew) {
   if (x.steps !== undefined) t.steps = (Array.isArray(x.steps) ? x.steps : String(x.steps || '').split('\n')).map(s => clean_(s, 500)).filter(Boolean).slice(0, 30).join('\n');
   else if (isNew) t.steps = '';
   if (x.links !== undefined) t.links = linksIn_(x.links, errs); else if (isNew) t.links = '';
+  if (x.resources !== undefined) t.resources = refsIn_(x.resources, errs); else if (isNew) t.resources = '';
 }
 function ownerFor_(v) {
   const k = String(v || '').trim().toLowerCase(), team = team_();
@@ -526,12 +534,139 @@ function syncTasks_(me, b) {
   if (moves.length) report_('Tasks renumbered', moves.map(k => k + ' → ' + map[k]).join(', '));
   return { ok: true, added: nNew, updated: nUpd, dropped: drop.length, renumbered: map };
 }
-const SYNC_FIELDS = ['owner', 'title', 'due', 'mins', 'why', 'steps', 'done_when', 'links', 'ask', 'area'];
+const SYNC_FIELDS = ['owner', 'title', 'due', 'mins', 'why', 'steps', 'done_when', 'links', 'ask', 'area', 'resources'];
+
+// ================================================================== Files: links (Canva, Figma, Sheets…) + the team files repo + what each task needs
+const RES_ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+/** What a link points at, from its address — decides the icon and the button ("Edit in Canva"). */
+function kindOf_(url) {
+  const u = String(url || '').toLowerCase();
+  if (/^https:\/\/([\w-]+\.)?canva\.(com|link)\//.test(u)) return 'canva';
+  if (/^https:\/\/([\w-]+\.)?figma\.com\//.test(u)) return 'figma';
+  if (/docs\.google\.com\/spreadsheets\//.test(u)) return 'sheet';
+  if (/docs\.google\.com\/forms\/|forms\.gle\//.test(u)) return 'form';
+  if (/docs\.google\.com\/document\//.test(u)) return 'doc';
+  if (/docs\.google\.com\/presentation\//.test(u)) return 'slides';
+  if (/(drive|docs)\.google\.com\//.test(u)) return 'drive';
+  if (/^https:\/\/(www\.)?github\.com\//.test(u)) return 'github';
+  if (/(youtube\.com|youtu\.be|vimeo\.com)\/|\.(mp4|mov|webm)(\?|$)/.test(u)) return 'video';
+  if (/\.(png|jpe?g|gif|webp)(\?|$)/.test(u)) return 'image';
+  if (/\.pdf(\?|$)/.test(u)) return 'pdf';
+  return 'link';
+}
+function resources_() {
+  if (MEMO.res) return MEMO.res;
+  const by = (a, b) => (Number(a.order) || 0) - (Number(b.order) || 0) || String(a.section).localeCompare(String(b.section)) || String(a.title).localeCompare(String(b.title));
+  MEMO.res = rows_('Resources').filter(r => r.id && r.title && r.url).sort(by);
+  return MEMO.res;
+}
+function resourceOut_(r) { return { id: r.id, title: r.title, url: r.url, kind: r.kind || kindOf_(r.url), section: r.section || '', private: r.private === 'yes', thumb: r.thumb || '', note: r.note || '' }; }
+/** One line of a task's "what you need" → an item: a Files link id, or gh:<path in the team files repo> (a trailing / = a folder). */
+function refOut_(ref) {
+  if (/^gh:/.test(ref)) {
+    const path = ref.slice(3).replace(/\/+$/, ''), folder = /\/$/.test(ref);
+    return { ref: ref, kind: folder ? 'folder' : 'file', path: path, title: path.split('/').pop(), folder: folder };
+  }
+  const r = resources_().find(x => x.id === ref);
+  return r ? Object.assign({ ref: ref }, resourceOut_(r)) : null;
+}
+function refsIn_(v, errs) {
+  const out = [];
+  (Array.isArray(v) ? v : String(v || '').split('\n')).map(s => String(s || '').trim()).filter(Boolean).forEach(ref => {
+    if (/^gh:/.test(ref)) {
+      const p = ref.slice(3).replace(/^\/+/, '');
+      if (!p || p.length > 300 || /(^|\/)\.\.?(\/|$)/.test(p) || /[\u0000-\u001f]/.test(p)) { errs.push('That file path looks wrong: ' + ref.slice(0, 60)); return; }
+      ref = 'gh:' + p;
+    } else if (!RES_ID_RE.test(ref) || !resources_().some(r => r.id === ref)) { errs.push('No such link in Files: ' + ref.slice(0, 40)); return; }
+    if (out.indexOf(ref) < 0) out.push(ref);
+  });
+  if (out.length > 12) errs.push('A task can list at most 12 files and links.');
+  return out.slice(0, 12).join('\n');
+}
+function resourceFields_(x, r, errs) {
+  const title = clean_(x.title, 120), url = clean_(x.url, 800), thumb = clean_(x.thumb, 800);
+  if (!title) errs.push('Give the link a title.');
+  if (!/^https:\/\/[^\s<>"']+$/i.test(url)) errs.push('The link must start with https:// (' + url.slice(0, 40) + ')');
+  if (thumb && !/^https:\/\/[^\s<>"']+$/i.test(thumb)) errs.push('The picture link must start with https://');
+  Object.assign(r, { title: title, url: url, kind: kindOf_(url), section: clean_(x.section, 40), private: yn_(x.private), thumb: thumb, note: clean_(x.note, 300), order: String(parseInt(x.order, 10) || 0) });
+}
+/** Leads: add or change links on the Files page. One ({resource}) or many ({resources: [...]}, matched by id — so a list can be re-imported). */
+function saveResources_(me, b) {
+  const list = Array.isArray(b.resources) ? b.resources.slice(0, 300) : [b.resource || {}], all = rows_('Resources'), errs = [], add = [], upd = [];
+  let n = all.reduce((m, r) => { const x = String(r.id).match(/^r(\d+)$/); return x ? Math.max(m, Number(x[1])) : m; }, 0) + 1;
+  list.forEach((x, i) => {
+    x = x || {};
+    const e = [], id = clean_(x.id, 40).toLowerCase(), cur = id ? all.find(r => r.id === id) || add.find(r => r.id === id) : null;
+    if (id && !RES_ID_RE.test(id)) e.push('Ids are small letters, digits and dashes: ' + id);
+    const r = cur || { id: id || 'r' + n++, added_by: me.key, added_at: now_() };
+    resourceFields_(x, r, e);
+    if (e.length) errs.push((list.length > 1 ? `Row ${i + 1}: ` : '') + e[0]);
+    else if (!cur) add.push(r);
+    else if (upd.indexOf(r) < 0 && add.indexOf(r) < 0) upd.push(r);
+  });
+  if (errs.length) return { ok: false, error: errs[0], errors: errs };
+  writeMany_('Resources', upd); appendMany_('Resources', add); MEMO.res = null;
+  log_(me.name, '', 'Files', `${add.length} link(s) added, ${upd.length} changed`);
+  return { ok: true, resources: resources_().map(resourceOut_), resource: resourceOut_(add[0] || upd[0]) };
+}
+function deleteResource_(me, b) {
+  const r = rows_('Resources').find(x => x.id === String(b.id || ''));
+  if (!r) return { ok: false, error: 'No such link.' };
+  const used = rows_('Tasks').filter(t => String(t.resources || '').split('\n').indexOf(r.id) >= 0);
+  if (used.length && !b.force) return { ok: false, code: 'used', tasks: used.map(t => t.id), error: `${used.length} task(s) list this link (${used.slice(0, 5).map(t => t.id).join(', ')}). Delete it anyway to remove it from them too.` };
+  if (used.length) { used.forEach(t => { t.resources = String(t.resources).split('\n').filter(x => x !== r.id).join('\n'); }); writeMany_('Tasks', used); }
+  deleteRows_('Resources', [r]); MEMO.res = null;
+  log_(me.name, '', 'Files', 'Link deleted: ' + r.title);
+  return { ok: true, id: r.id, tasks: used.map(t => t.id) };
+}
+function filesOut_() { const S = S_(); return { repo: S.files_repo || '', branch: S.files_branch || 'main', server: SELF_HOSTED }; }
+function filesList_(me) {
+  const viewer = access_(me) === 'viewer';
+  return { ok: true, files: filesOut_(), resources: resources_().filter(r => !viewer || r.private !== 'yes').map(resourceOut_) };
+}
+
+/** Admin, once after moving files to a new place: task links that point into an old GitHub repo move to "what you need" or to a new address.
+ *  b = { prefix: 'https://github.com/owner/old-repo/', branch: 'main', map: { 'path/in/old/repo': 'files-link-id' | 'gh:new/path' | 'https://…' | '' (= drop) }, dryRun }
+ *  Nobody gets a message: only where the links point changes. */
+function relinkTasks_(me, b) {
+  const prefix = String(b.prefix || '').replace(/\/+$/, '') + '/', map = b.map || {}, branch = String(b.branch || 'main'), errs = [];
+  if (!/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/$/.test(prefix)) return { ok: false, error: 'prefix must look like https://github.com/owner/repo/' };
+  Object.keys(map).forEach(k => { const v = String(map[k] || ''); if (v && !/^https:\/\//.test(v) && !/^gh:[^.]/.test(v) && !resources_().some(r => r.id === v)) errs.push(`"${k}" → "${v}" is not a link, a gh: path or a Files id`); });
+  if (errs.length) return { ok: false, error: errs[0], errors: errs };
+  const has = k => Object.prototype.hasOwnProperty.call(map, k);
+  const look = path => { path = path.replace(/\/+$/, ''); return has(path) ? String(map[path] || '') : has(path + '/') ? String(map[path + '/'] || '') : null; };
+  const changed = [], unmapped = [], counts = { moved: 0, rewritten: 0, dropped: 0 };
+  rows_('Tasks').forEach(t => {
+    if (!t.links) return;
+    const keep = [], refs = String(t.resources || '').split('\n').filter(Boolean);
+    let touched = false;
+    String(t.links).split('\n').filter(Boolean).forEach(line => {
+      const i = line.indexOf(' | '), label = i > 0 ? line.slice(0, i) : '', url = i > 0 ? line.slice(i + 3) : line;
+      const m = url.indexOf(prefix) === 0 ? url.slice(prefix.length).match(/^(?:blob|tree)\/([^/]+)\/(.+)$/) : null;
+      if (!m || m[1] !== branch) { keep.push(line); return; }
+      let path; try { path = decodeURIComponent(m[2].split('#')[0].split('?')[0]); } catch (e) { path = m[2]; }
+      const to = look(path);
+      if (to === null) { unmapped.push({ task: t.id, path: path }); keep.push(line); return; }
+      touched = true;
+      if (!to) counts.dropped++;
+      else if (/^https:\/\//.test(to)) { keep.push((label || to) + ' | ' + to); counts.rewritten++; }
+      else { if (refs.indexOf(to) < 0) refs.push(to); counts.moved++; }
+    });
+    if (touched) changed.push({ t: t, links: keep.join('\n'), resources: refs.slice(0, 12).join('\n') });
+  });
+  const out = { ok: true, dryRun: !!b.dryRun, tasks: changed.length, moved: counts.moved, rewritten: counts.rewritten, dropped: counts.dropped, unmapped: unmapped };
+  if (b.dryRun || !changed.length) return out;
+  const now = now_();
+  changed.forEach(c => { c.t.links = c.links; c.t.resources = c.resources; c.t.updated_at = now; });
+  writeMany_('Tasks', changed.map(c => c.t));
+  logMany_(changed.map(c => [me.name, c.t.id, 'Links moved', 'to Files']));
+  return out;
+}
 
 // ================================================================== task-change alerts (added / removed / moved / new date)
 const CHANGE_GROUP = { added: 'added', restored: 'added', 'moved-in': 'added', removed: 'removed', dropped: 'removed', 'moved-away': 'removed', date: 'dates', renamed: 'edits', details: 'edits' };
 /** The parts of a task its owner cares about, to spot what changed. */
-function snap_(t) { return t ? { id: t.id || '', owner: t.owner, title: t.title, due: t.due, status: t.status || 'Not started', details: [t.why, t.steps, t.done_when, t.links, t.ask].join('\u0001') } : null; }
+function snap_(t) { return t ? { id: t.id || '', owner: t.owner, title: t.title, due: t.due, status: t.status || 'Not started', details: [t.why, t.steps, t.done_when, t.links, t.ask, t.resources || ''].join('\u0001') } : null; }
 /** Before/after snapshots of one task → what its owner(s) should hear. a = null: a new task; b = null: deleted. */
 function diffTask_(a, b) {
   const out = [], t = b || a, it = (key, kind, from, to) => out.push({ key: key, kind: kind, id: t.id, title: t.title, due: t.due, from: from || '', to: to || '' });
@@ -949,7 +1084,9 @@ function saveSettings_(me, b) {
     if (k === 'reminder_hour') { const h = parseInt(val, 10); if (!(h >= 0 && h <= 23)) errs.push('Reminder hour must be 0–23.'); else val = String(h); }
     if (URL_KEYS.indexOf(k) >= 0 && val && !isUrl_(val)) errs.push(`${k.replace(/_/g, ' ')} must be a full link starting with https://`);
     if (k === 'city_email' && val && !isEmail_(val)) errs.push('Public email looks wrong.');
-    if (k === 'hub_id' && val && !HUB_RE.test(val) && !HUB_NAME_RE.test(val)) errs.push('Hub ID looks wrong (AKfy… or a short name like tashkent).');
+    if (k === 'hub_id' && val && !HUB_RE.test(val) && !HUB_NAME_RE.test(val)) errs.push('Hub ID looks wrong (AKfy… or a short name like springfield).');
+    if (k === 'files_repo') { val = val.replace(/^https:\/\/github\.com\//i, '').replace(/\.git$|\/+$/g, ''); if (val && !REPO_RE.test(val)) errs.push('Team files repo: write it as owner/repo, e.g. yourname/haven-yourcity-team.'); }
+    if (k === 'files_branch') { val = val || 'main'; if (!/^[\w.\/-]{1,60}$/.test(val)) errs.push('Branch name looks wrong.'); }
     if (k === 'site_url') val = val.replace(/\/+$/, '');
     out[k] = val;
   });
@@ -1011,6 +1148,10 @@ const ACTIONS = {
   'task.import': { level: 'lead', post: true, lock: true, fn: importTasks_ },
   'task.sync': { level: 'admin', post: true, lock: true, fn: syncTasks_ },
   'task.delete': { level: 'admin', post: true, lock: true, fn: deleteTasks_ },
+  'task.relink': { level: 'admin', post: true, lock: true, fn: relinkTasks_ },
+  'files.list': { level: 'any', fn: filesList_ },
+  'resource.save': { level: 'lead', post: true, lock: true, fn: saveResources_ },
+  'resource.delete': { level: 'lead', post: true, lock: true, fn: deleteResource_ },
   'person.add': { level: 'admin', post: true, lock: true, fn: addPerson_ },
   'person.edit': { level: 'admin', post: true, lock: true, fn: editPerson_ },
   'person.deactivate': { level: 'admin', post: true, lock: true, fn: deactivatePerson_ },
@@ -1098,10 +1239,12 @@ function apiMe_(me, q) {
     tasks: lvl === 'viewer' ? [] : all.filter(t => t.owner === me.key).map(taskOut_),
     rules: rules_(), meetings: meetings_(), milestones: milestones_(),
     publicLink: publicLink_(),
+    features: FEATURES,
+    files: filesOut_(), resources: resources_().filter(r => lvl !== 'viewer' || r.private !== 'yes').map(resourceOut_),
   };
   if (seeAll) {
     out.all = all.map(taskOut_);
-    if (lvl === 'viewer') out.all.forEach(t => { t.proof = ''; t.blocked_reason = ''; t.ask = ''; });
+    if (lvl === 'viewer') out.all.forEach(t => { t.proof = ''; t.blocked_reason = ''; t.ask = ''; t.resources = t.resources.filter(r => !r.private); });
     const logAll = rows_('Log'), seen = {};
     logAll.forEach(l => { if (l.who && ['system', 'bot'].indexOf(l.who) < 0) seen[l.who] = l.time; });
     out.lastSeen = seen;
@@ -1123,7 +1266,7 @@ function apiMe_(me, q) {
 }
 function apiExport_() {
   const data = {};
-  ['Settings', 'People', 'Tasks', 'Log', 'Meetings', 'Rules', 'Milestones', 'Applications', 'Sponsors'].forEach(n => {
+  ['Settings', 'People', 'Tasks', 'Log', 'Meetings', 'Rules', 'Milestones', 'Applications', 'Sponsors', 'Resources'].forEach(n => {
     data[n] = rows_(n).map(r => { const o = {}; Object.keys(r).forEach(k => { if (k[0] !== '_' && k !== 'token' && k !== 'chat_id') o[k] = r[k]; }); return o; });
   });
   return { ok: true, version: HUB_VERSION, exported: now_(), data: data };

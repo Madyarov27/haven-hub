@@ -1,5 +1,6 @@
 /* The task card: Start → Done + proof (photo / file / link) or Blocked + what you need. Leads also approve or ask for a redo. */
 import { $, $$, esc, icon, pill, reviewPill, dueInfo, linkify, safeUrl, toast, store, busy, first } from './ui.js';
+import { needsStrip, wireThumbs } from './views/files.js';
 
 const stCls = s => ({ 'In progress': 'st-ip', Blocked: 'st-bl', Done: 'st-dn', Dropped: 'st-dr' }[s] || '');
 const dur = m => !m ? '' : m < 60 ? `${m} min` : (m % 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m / 60} h`);
@@ -18,6 +19,7 @@ export function taskCard(ctx, t, opts = {}) {
       <div class="row" style="gap:6px;justify-content:flex-end">${reviewPill(t)}${pill(t.status)}</div></summary>
     <div class="t-body">
       ${t.why ? `<p class="why"><b>Why:</b> ${esc(t.why)}</p>` : ''}
+      ${t.resources && t.resources.length ? needsStrip(ctx, t.resources) : ''}
       ${t.steps && t.steps.length ? `<ol class="steps">${t.steps.map((s, i) => `<li><label><input type="checkbox" data-step="${i}" ${checks[i] ? 'checked' : ''} ${canAct ? '' : 'disabled'}><span class="num">${i + 1}.</span><span>${esc(s)}</span></label></li>`).join('')}</ol>` : ''}
       ${t.done_when ? `<div class="donebox"><b>Done =</b> ${esc(t.done_when)}</div>` : ''}
       ${t.links && t.links.length ? `<div class="links">${t.links.filter(l => safeUrl(l.url)).map(l => `<a href="${esc(safeUrl(l.url))}" target="_blank" rel="noopener">${icon('external')} ${esc(l.label)}</a>`).join('')}</div>` : ''}
@@ -53,6 +55,7 @@ function shrink(file, max) {
 
 /** One delegated listener per container. onChange(task) runs after the server saved a change. */
 export function wireTasks(el, ctx, onChange) {
+  wireThumbs(el);
   el.addEventListener('change', e => {
     const pf = e.target.closest('input.pf');
     if (pf) { pf.parentElement.querySelector('.pfn').textContent = pf.files.length ? `📎 ${pf.files.length} file(s) ready — they upload when you press Send.` : ''; return; }

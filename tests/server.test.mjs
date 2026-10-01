@@ -6,6 +6,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer, request } from 'node:http';
 import { createHub } from '../server/app.mjs';
+import { createLibrary } from '../server/library.mjs';
+import { execFileSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import { createGas, loadBackend } from '../dev/gas-fakes.js';
 
 const CODE = readFileSync(new URL('../apps-script/Code.gs', import.meta.url), 'utf8');
@@ -26,7 +30,7 @@ function fakeTelegram() {
 }
 async function boot(extra = {}) {
   const dataDir = extra.dataDir || mkdtempSync(join(tmpdir(), 'hub-')), tg = extra.tg || fakeTelegram(), mails = [];
-  const hub = await createHub({ dataDir, backupDir: join(dataDir, 'bk'), code: CODE, fetch: tg.fetchImpl, log: () => {},
+  const hub = await createHub({ dataDir, backupDir: join(dataDir, 'bk'), code: CODE, fetch: tg.fetchImpl, log: () => {}, library: extra.library && extra.library(dataDir),
     env: Object.assign({ PUBLIC_URL: PUB, HUB_TZ: 'Asia/Tashkent', TG_SECRET: 'sekret', TG_PATH: 'p4th' }, extra.env || {}), mailTransport: { sendMail: async m => { mails.push(m); } } });
   const srv = createServer(hub.handle); await new Promise(r => srv.listen(0, '127.0.0.1', r));
   const base = 'http://127.0.0.1:' + srv.address().port;
@@ -305,4 +309,36 @@ test('password sign-in: made from a link (the link then stops working), sessions
   assert.equal(s.hub.store.getAccount(bob.u), undefined, 'the password is gone');
   assert.equal((await s.get({ action: 'me', u: bob.u, t: new URL(reset.link).searchParams.get('t') })).ok, true, 'the fresh link works');
   await s.stop();
+});
+
+test('team files: the server mirrors the repo, lists it, serves only its files, and notices new commits', async () => {
+  const src = mkdtempSync(join(tmpdir(), 'team-src-')), g = (...a) => execFileSync('git', a, { cwd: src, stdio: 'pipe' });
+  g('init', '-q', '-b', 'main'); g('config', 'user.email', 't@example.com'); g('config', 'user.name', 'T');
+  mkdirSync(join(src, 'brand-kit'), { recursive: true }); mkdirSync(join(src, '.github'), { recursive: true });
+  writeFileSync(join(src, 'brand-kit', 'logo.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
+  writeFileSync(join(src, 'README.md'), '# files'); writeFileSync(join(src, '.github', 'x.yml'), 'x: 1'); writeFileSync(join(src, '.gitkeep'), '');
+  g('add', '-A'); g('commit', '-q', '-m', 'first');
+  const url = pathToFileURL(src).href;
+  const s = await boot({ library: dataDir => createLibrary({ dataDir, urlFor: () => url }) });
+  try {
+    const admin = await setUp(s);
+    await s.hub.admin['set-setting']('files_repo', 'team/files');
+    const first = await s.hub.admin['files-sync']();
+    assert.equal(first.error, ''); assert.equal(first.files, 2, 'dot-files and .github are not listed');
+    const list = await s.get(Object.assign({ action: 'files.list' }, admin));
+    assert.equal(list.ok, true); assert.deepEqual(list.tree.map(f => f[0]).sort(), ['README.md', 'brand-kit/logo.png']);
+    const img = await fetch(s.base + '/files/raw/brand-kit/logo.png');
+    assert.equal(img.status, 200); assert.equal(img.headers.get('content-type'), 'image/png'); assert.match(img.headers.get('content-disposition'), /^inline/);
+    assert.match(img.headers.get('content-security-policy'), /sandbox/);
+    const md = await fetch(s.base + '/files/raw/README.md');
+    assert.match(md.headers.get('content-disposition'), /^attachment/);
+    assert.equal((await fetch(s.base + '/files/raw/.github/x.yml')).status, 404);
+    assert.equal((await fetch(s.base + '/files/raw/..%2Fhub.db')).status, 404);
+    assert.equal((await fetch(s.base + '/files/raw/brand-kit/logo.png', { headers: { 'If-None-Match': img.headers.get('etag') } })).status, 304);
+    // a new commit on GitHub → the next pull picks it up
+    writeFileSync(join(src, 'brand-kit', 'flyer.pdf'), '%PDF-1.4'); g('add', '-A'); g('commit', '-q', '-m', 'flyer');
+    const r = await s.hub.library.sync('team/files', 'main');
+    assert.equal(r.changed, true); assert.deepEqual(r.added, ['brand-kit/flyer.pdf']);
+    assert.equal((await fetch(s.base + '/files/raw/brand-kit/flyer.pdf')).headers.get('content-type'), 'application/pdf');
+  } finally { await s.stop(); rmSync(src, { recursive: true, force: true }); }
 });

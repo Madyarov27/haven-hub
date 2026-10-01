@@ -13,6 +13,7 @@ import { timeline, scores } from './views/admin-timeline.js';
 import { applications } from './views/admin-applications.js';
 import { content } from './views/admin-content.js';
 import { settings } from './views/admin-settings.js';
+import { filesPage } from './views/files.js';
 
 const CFG = api.CFG;
 const root = $('#root');
@@ -25,6 +26,7 @@ const NAV = [
   { g: 'Dashboard', r: 'admin/scores', t: 'Scorecards', i: 'award', roles: ['admin', 'lead', 'viewer'], v: scores },
   { g: 'Me', r: 'tasks', t: 'My tasks', i: 'check', roles: DOERS, v: member.myTasks, n: D => (D.tasks || []).filter(t => !['Done', 'Dropped'].includes(t.status) && t.due < D.now).length },
   { g: 'Me', r: 'calendar', t: 'Calendar', i: 'calendar', roles: ALL, v: member.calendar },
+  { g: 'Me', r: 'files', t: 'Files', i: 'folder', roles: ALL, v: filesPage, f: 'files' },
   { g: 'Me', r: 'team', t: 'Team', i: 'users', roles: ALL, v: member.team },
   { g: 'Me', r: 'rules', t: 'Rules', i: 'book', roles: DOERS, v: member.rules },
   { g: 'Me', r: 'profile', t: 'Profile', i: 'user', roles: ALL, v: member.profile },
@@ -37,6 +39,8 @@ const NAV = [
 let loading = false;
 const route = () => location.hash.replace(/^#\/?/, '').split('?')[0].replace(/\/$/, '');
 const role = () => (ctx.D && ctx.D.me && ctx.D.me.access) || 'member';
+/** A page shows when the role may see it and the hub's backend has the feature (older Code.gs = no Files page yet). */
+const allowed = (n, r) => n.roles.includes(r) && (!n.f || ((ctx.D && ctx.D.features) || []).includes(n.f));
 const vcmp = (a, b) => { const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0); return 0; };
 
 export const ctx = {
@@ -114,7 +118,7 @@ function render() {
   }
   const me = role(), home = me === 'member' ? 'tasks' : 'admin';
   let item = NAV.find(n => n.r === (r || home));
-  if (!item || !item.roles.includes(me)) item = NAV.find(n => n.r === home);
+  if (!item || !allowed(item, me)) item = NAV.find(n => n.r === home);
   shell(item);
   ctx.el = $('#view');
   ctx.setActions('');
@@ -126,7 +130,7 @@ function shell(item) {
   const D = ctx.D, me = D.me, ev = D.event || {}, r = role();
   const groups = [...new Set(NAV.map(n => n.g))];
   const nav = groups.map(g => {
-    const items = NAV.filter(n => n.g === g && n.roles.includes(r));
+    const items = NAV.filter(n => n.g === g && allowed(n, r));
     if (!items.length) return '';
     return `<div class="nav-g">${esc(g === 'Me' && r === 'viewer' ? 'Info' : g)}</div>` + items.map(n => {
       const c = n.n ? n.n(D) : 0;

@@ -82,6 +82,8 @@ export function resolve() {
   return hubId;
 }
 export const hub = () => hubId;
+/** Address of the hub's own server (for its /files/raw/…), when it runs on one. */
+export const serverBase = () => SELF ? location.origin : String(SERVERS[hubId] || '').replace(/\/api\/?$/, '');
 export const urlFor = id => id === 'self' ? CFG.api : SERVERS[id] ? SERVERS[id] : 'https://script.google.com/macros/s/' + id + '/exec';
 export const siteUrl = () => (location.origin + location.pathname).replace(/\/index\.html$/, '').replace(/\/$/, '');
 export const publicUrl = () => siteUrl() + '/' + (SELF || (CFG.defaultHub && hubId === CFG.defaultHub) ? '' : '?hub=' + hubId);
@@ -147,7 +149,7 @@ async function demo() {
     const gas = fakes.createGas({ tz: browserTz() }), be = fakes.loadBackend(code, gas);
     const people = params.get('demo') === 'fresh' ? {} : data.seed(be, gas, DEMO_HUB);
     demoSession = people[params.get('as') || 'admin'] || null;
-    window.__hub = { be, gas, people, sheetUrl: gas._ss.getUrl() };
+    window.__hub = { be, gas, people, sheetUrl: gas._ss.getUrl(), tree: data.TREE || [], raw: data.rawFor };
     return be;
   })();
   return demoReady;

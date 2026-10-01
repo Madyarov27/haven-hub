@@ -42,6 +42,10 @@ export function settings(ctx) {
       ${field({ label: 'Show the team (first names + roles)', name: 'public_show_team', type: 'toggle', value: S.public_show_team, hint: 'Most organizers are under 18 — ask the team before you turn this on.' })}
       ${field({ label: '“Join the team” form', name: 'join_form', type: 'toggle', value: S.join_form, hint: 'Answers land in Applications.' })}
       ${field({ label: 'Text above the form', name: 'join_intro', type: 'textarea', value: S.join_intro, attrs: 'rows="2" style="min-height:60px"' })}`)}
+    ${(D.features || []).includes('files') ? form('s-files', 'Team files', `Posters, logos and slides live in a <b>public</b> GitHub repo; the <a href="#/files">Files</a> page shows them with previews${D.hosting === 'server' ? ' (this server keeps a copy and checks for changes every few minutes)' : ''}. Canva, Figma and Google links are added on the Files page.`, `
+      ${field({ label: 'GitHub repo (owner/repo)', name: 'files_repo', value: S.files_repo, placeholder: 'yourname/haven-yourcity-team', hint: 'Public repos only — never put phone numbers, contact lists or Canva edit links in it.' })}
+      ${field({ label: 'Branch', name: 'files_branch', value: S.files_branch || 'main' })}`,
+      S.files_repo ? `<a class="btn ghost" href="https://github.com/${esc(S.files_repo)}" target="_blank" rel="noopener">${icon('external')} Open on GitHub</a>` : '') : ''}
     ${form('s-hub', 'Hub & data', 'Advanced — you rarely need to change these.', `
       ${field({ label: 'Website address', name: 'site_url', type: 'url', value: S.site_url, hint: 'Change it only if you run your own copy of the website.' })}
       ${field({ label: 'Hub ID (web-app deployment)', name: 'hub_id', value: S.hub_id, hint: 'Part of every personal link. Filled in automatically.' })}`,
@@ -59,10 +63,11 @@ export function settings(ctx) {
     busy(b, false);
     if (!r.ok) return toast(r.error, 'err');
     D.settings = r.settings; D.event = Object.assign(D.event || {}, r.event); ctx.api.cache(D);
+    if (id === 's-files') { D.files = Object.assign({}, D.files, { repo: r.settings.files_repo, branch: r.settings.files_branch || 'main' }); ctx.api.cache(D); }
     toast(r.warning || 'Saved.', r.warning ? 'err' : 'ok');
     if (id === 's-event') ctx.render();
   };
-  ['s-event', 's-rem', 's-pub', 's-hub'].forEach(id => { $('#' + id).onsubmit = e => save(e, id); });
+  ['s-event', 's-rem', 's-pub', 's-hub', 's-files'].forEach(id => { const f = $('#' + id); if (f) f.onsubmit = e => save(e, id); });
   $('#cpub').onclick = () => copy(pub, 'Public link copied.');
   $('#exp').onclick = async e => { const btn = e.currentTarget;
     busy(btn, true, 'Exporting…'); const r = await ctx.api.get('export'); busy(btn, false);

@@ -9,11 +9,12 @@ import { openStore } from './store.mjs';
 import { createRuntime } from './runtime.mjs';
 import { createTelegram, createMailer, drainOutbox } from './outbox.mjs';
 import { createAccounts, SESSION_RE, usernameProblem, passwordProblem } from './accounts.mjs';
+import { createLibrary } from './library.mjs';
 import { loadBackend } from '../dev/gas-fakes.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
-const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https://raw.githubusercontent.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https://raw.githubusercontent.com https://api.github.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 const same = (a, b) => { const x = Buffer.from(String(a || '')), y = Buffer.from(String(b || '')); return x.length === y.length && x.length > 0 && timingSafeEqual(x, y); };
 const code24 = () => randomBytes(18).toString('base64url');
 
@@ -31,6 +32,7 @@ export async function createHub(opts = {}) {
   const mailer = createMailer({ env, transport: opts.mailTransport });
   const runtime = createRuntime({ store, filesDir, env, telegram });
   const accounts = createAccounts({ store });
+  const library = opts.library || createLibrary({ dataDir, log });
   const started = Date.now();
   // the website may live elsewhere (e.g. GitHub Pages) and call this server's /api — allow those origins
   const origins = String(env.ALLOWED_ORIGINS || 'https://notazizelse.github.io').split(/[\s,]+/).filter(Boolean);
@@ -75,6 +77,10 @@ export async function createHub(opts = {}) {
     if (PRE[params.action]) await PRE[params.action](params);
     const out = await run(() => { const no = signedIn(params); return no || (method === 'GET' ? be.get(params) : be.post(params)); });
     if (params.action === 'tg.setToken' && out.ok) pendingWebhook = true;
+    if (params.action === 'files.list' && out.ok) { // the team files repo, from this server's mirror
+      Object.assign(out, library.listing(out.files));
+      if (!out.tree && out.files.repo) library.sync(out.files.repo, out.files.branch).catch(() => {});
+    }
     return out;
   }
 
@@ -211,6 +217,8 @@ export async function createHub(opts = {}) {
       await once('sched_export', sunday && hour >= 20, () => emailExport());
     }
     await once('sched_backup', hour >= 3, async () => { backup(); store.pruneSessions(); });
+    const pulled = await library.maybeSync(S.files_repo || env.TEAM_REPO || '', S.files_branch || 'main', Number(env.TEAM_REPO_PULL_MIN) || 5);
+    if (pulled && pulled.changed && pulled.before) log(`team files: ${(pulled.added || []).length} new or changed, ${(pulled.removed || []).length} removed`);
     if (ready) await call('flushChanges', false); // task-change alerts wait until nobody edited for a minute
     const old = Date.now() - 3600e3; buckets.forEach((b, k) => { if (b.t < old) buckets.delete(k); });
     if (Date.now() - lastBotCheck > 60e3 && store.getProp('BOT_TOKEN')) {
@@ -259,6 +267,12 @@ export async function createHub(opts = {}) {
     async export() { return call('apiExport_'); },
     async backup() { return { file: backup() }; },
     async 'set-webhook'() { return telegram.setWebhook(store.getProp('BOT_TOKEN')); },
+    /** Pull the team files repo now. */
+    async 'files-sync'() { const S = await run(() => { be.call('resetMemo_'); return be.call('S_'); }); const r = await library.sync(S.files_repo || env.TEAM_REPO || '', S.files_branch || 'main'); const st = library.state(); return { repo: st.repo, head: st.head.slice(0, 7), files: st.tree.length, error: st.error || r.error || '' }; },
+    /** Links for the Files page from a JSON file: [{ id?, title, url, section, private, note, thumb }]. Same ids are updated, so it can be run again. */
+    async 'import-resources'(file) { const list = JSON.parse(readFileSync(String(file), 'utf8')); return run(() => { be.call('resetMemo_'); const r = be.call('saveResources_', { name: 'server admin', key: '' }, { resources: list }); if (!r.ok) throw new Error((r.errors || [r.error]).join('; ')); return { links: r.resources.length }; }); },
+    /** Move task links that point into an old GitHub repo (JSON: { prefix, branch, map }). Without --apply it only shows what would change. */
+    async relink(file, apply) { const b = JSON.parse(readFileSync(String(file), 'utf8')); return run(() => { be.call('resetMemo_'); const r = be.call('relinkTasks_', { name: 'server admin', key: '' }, Object.assign({}, b, { dryRun: apply !== '--apply' })); if (!r.ok) throw new Error((r.errors || [r.error]).join('; ')); return r; }); },
     /** One setting (as in Dashboard → Settings, plus site_url / hub_id), then personal links are rebuilt. */
     async 'set-setting'(key, value = '') {
       key = String(key || ''); value = String(value);
@@ -329,6 +343,7 @@ export async function createHub(opts = {}) {
       }
       if (path === '/healthz') return send(res, 200, { ok: true, version: be.call('__eval', 'HUB_VERSION'), uptimeMin: Math.round((Date.now() - started) / 6e4) });
       if (path.startsWith('/file/d/')) return send(res, 302, '', 'text/plain', { Location: '/' }); // proof files open inside the hub (Show file)
+      if (path.startsWith('/files/raw/') && (req.method === 'GET' || req.method === 'HEAD')) { let rel; try { rel = decodeURIComponent(path.slice(11)); } catch (e) { return send(res, 400, 'Bad path', 'text/plain'); } return library.serve(rel, req, res); }
       if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method not allowed', 'text/plain');
       // the website
       if (path === '/config.js') return send(res, 200, configJs(), MIME['.js'], { 'Cache-Control': 'no-cache' });
@@ -346,6 +361,6 @@ export async function createHub(opts = {}) {
     }
   }
 
-  return { handle, admin, tick, api, webhook, accounts, importStart, importFiles, importFinish, backup, store, runtime, be, telegram, env, drain: async () => kick(), drainNow: () => drainOutbox({ store, telegram, mailer, filesDir, log }),
+  return { handle, admin, tick, api, webhook, accounts, library, importStart, importFiles, importFinish, backup, store, runtime, be, telegram, env, drain: async () => kick(), drainNow: () => drainOutbox({ store, telegram, mailer, filesDir, log }),
     close: () => store.close() };
 }

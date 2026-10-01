@@ -1,6 +1,7 @@
 /* All tasks (leads): searchable table, bulk actions, create/edit drawer, CSV export + import (add tasks, or update the whole plan). */
 import { $, $$, esc, icon, avatar, pill, reviewPill, dueInfo, parseLocal, fmtDue, DAY, first, toast, busy, drawer, confirmBox, field, formValues, csvParse, csvBuild, download, empty, debounce, linkify } from '../ui.js';
 import { taskCard, wireTasks } from '../task-card.js';
+import { pickNeeds, needChips } from './files.js';
 
 const F = { q: '', status: 'open', owner: '', area: '', due: '', sort: 'due', dir: 1 };
 const sel = new Set();
@@ -115,7 +116,9 @@ function drawBulk(ctx) {
 export function taskDrawer(ctx, id, preset) {
   const D = ctx.D, t = id ? (D.all || []).find(x => x.id === id) : null;
   if (id && !t) return toast('That task is gone — refresh.', 'err');
-  const x = t || Object.assign({ title: '', owner: '', due: '', mins: 30, area: '', why: '', steps: [], done_when: '', links: [], ask: '' }, preset || {});
+  const x = t || Object.assign({ title: '', owner: '', due: '', mins: 30, area: '', why: '', steps: [], done_when: '', links: [], ask: '', resources: [] }, preset || {});
+  let needs = (x.resources || []).map(r => r.ref || r);
+  const hasFiles = (D.features || []).includes('files');
   const [dd, tt] = [String(x.due || '').slice(0, 10), String(x.due || '').slice(11, 16) || '20:00'];
   const areas = areasOf(ctx);
   const owners = t ? field({ label: 'Owner', name: 'owner', type: 'select', value: x.owner, options: D.team.map(p => [p.key, p.name]), full: true })
@@ -131,7 +134,8 @@ export function taskDrawer(ctx, id, preset) {
     ${field({ label: 'Why it matters (one line)', name: 'why', value: x.why, full: true })}
     ${field({ label: 'Steps — one per line', name: 'steps', type: 'textarea', value: (x.steps || []).join('\n'), full: true, placeholder: 'Print 3 posters (Design folder)\nAsk the IT teacher where to hang them\nTake a photo of each' })}
     ${field({ label: 'Done = (the proof)', name: 'done_when', value: x.done_when, full: true, placeholder: '3 photos of the posters on the wall' })}
-    ${field({ label: 'Links — one per line: Label | https://…', name: 'links', type: 'textarea', value: (x.links || []).map(l => l.label === l.url ? l.url : l.label + ' | ' + l.url).join('\n'), full: true, attrs: 'rows="2" style="min-height:60px"' })}
+    ${hasFiles ? `<div class="field full"><label>What they need — from Files</label><div class="need-chips" id="needs">${needChips(ctx, needs)}</div><div><button type="button" class="btn soft sm" id="pick">${icon('folder')} Choose from Files</button></div><small class="hint">Posters, Canva links, the tracker… They show on the task as buttons with previews.</small></div>` : ''}
+    ${field({ label: hasFiles ? 'Other links — one per line: Label | https://…' : 'Links — one per line: Label | https://…', name: 'links', type: 'textarea', value: (x.links || []).map(l => l.label === l.url ? l.url : l.label + ' | ' + l.url).join('\n'), full: true, attrs: 'rows="2" style="min-height:60px"' })}
     ${field({ label: 'Who to ask', name: 'ask', value: x.ask, full: true, placeholder: 'Ann — design files' })}
     <div class="full">${field({ label: t ? 'Tell the people involved about this change' : 'Tell them about the new task', name: 'notify', type: 'toggle', value: true, hint: 'Telegram, or email if they haven\'t connected Telegram. Admins get a short summary. A new date, owner, title or steps counts as a change.' })}</div>
   </form>`;
@@ -149,9 +153,14 @@ export function taskDrawer(ctx, id, preset) {
   const collect = () => {
     const v = formValues(form);
     return { title: v.title, due: v.dd ? v.dd + ' ' + (v.tt || '20:00') : '', mins: Number(v.mins) || 30, area: v.area, why: v.why, done_when: v.done_when, ask: v.ask,
-      steps: v.steps.split('\n').map(s => s.trim()).filter(Boolean), links: v.links, owners: v.owners, owner: v.owner, status: v.status, notify: v.notify };
+      steps: v.steps.split('\n').map(s => s.trim()).filter(Boolean), links: v.links, owners: v.owners, owner: v.owner, status: v.status, notify: v.notify,
+      resources: hasFiles ? needs : undefined };
   };
+  const drawNeeds = () => { const box = $('#needs', d.el); if (box) box.innerHTML = needChips(ctx, needs); };
   d.el.addEventListener('click', async e => {
+    if (e.target.closest('#pick')) { const r = await pickNeeds(ctx, needs); if (r) { needs = r; drawNeeds(); } return; }
+    const un = e.target.closest('[data-unpick]');
+    if (un) { needs = needs.filter(x => x !== un.dataset.unpick); drawNeeds(); return; }
     const sv = e.target.closest('[data-save]');
     if (sv) {
       const v = collect();
@@ -181,26 +190,26 @@ export function taskDrawer(ctx, id, preset) {
 }
 
 // ------------------------------------------------------------------ CSV import
-const COLS = ['title', 'owner', 'due', 'mins', 'area', 'why', 'steps', 'done_when', 'ask', 'links'];
+const COLS = ['title', 'owner', 'due', 'mins', 'area', 'why', 'steps', 'done_when', 'ask', 'links', 'resources'];
 const ALIAS = { task: 'title', name: 'title', who: 'owner', assignee: 'owner', person: 'owner', deadline: 'due', 'due date': 'due', date: 'due', minutes: 'mins', 'done when': 'done_when', proof: 'done_when', 'who to ask': 'ask' };
 function rowsFromCsv(text) {
   const rows = csvParse(text); if (rows.length < 2) return { error: 'Paste a header row and at least one task.' };
   const head = rows[0].map(h => { h = String(h).trim().toLowerCase().replace(/_/g, ' '); return ALIAS[h] || h.replace(/ /g, '_'); });
   if (!head.includes('title') || !head.includes('owner') || !head.includes('due')) return { error: 'The header row needs at least: title, owner, due.' };
   const split = s => String(s || '').split(/\n/.test(String(s || '')) ? /\n/ : /;/).map(x => x.trim()).filter(Boolean);
-  return { rows: rows.slice(1).map(r => { const o = {}; head.forEach((h, i) => { if (COLS.includes(h) || h === 'id') o[h] = String(r[i] == null ? '' : r[i]).trim(); }); o.steps = split(o.steps); o.links = split(o.links).join('\n'); return o; }) };
+  return { rows: rows.slice(1).map(r => { const o = {}; head.forEach((h, i) => { if (COLS.includes(h) || h === 'id') o[h] = String(r[i] == null ? '' : r[i]).trim(); }); o.steps = split(o.steps); o.links = split(o.links).join('\n'); if (head.includes('resources')) o.resources = split(o.resources); else delete o.resources; return o; }) };
 }
 /** Every task (Done and Dropped too) in the same columns the importer reads, plus id + status — edit it in a spreadsheet and import it back. */
 function exportCsv(ctx) {
   const list = (ctx.D.all || []).slice().sort((a, b) => a.due < b.due ? -1 : a.due > b.due ? 1 : 0);
   const rows = [['id'].concat(COLS, ['status'])].concat(list.map(t => [t.id, t.title, t.owner, t.due, t.mins, t.area, t.why, (t.steps || []).join('\n'), t.done_when, t.ask,
-    (t.links || []).map(l => l.label === l.url ? l.url : l.label + ' | ' + l.url).join('\n'), t.status]));
+    (t.links || []).map(l => l.label === l.url ? l.url : l.label + ' | ' + l.url).join('\n'), (t.resources || []).map(r => r.ref).join('\n'), t.status]));
   download(`${(ctx.D.event.name || 'haven').replace(/\W+/g, '-').toLowerCase()}-tasks-${String(ctx.D.now || '').slice(0, 10)}.csv`, csvBuild(rows), 'text/csv');
   toast(`Exported ${list.length} tasks.`);
 }
 function importDrawer(ctx) {
   let mode = 'add', parsed = null;
-  const example = csvBuild([COLS, ['Call the IT teacher at School 110', ctx.D.team[0] ? ctx.D.team[0].key : 'ann', '2026-10-12 18:00', '20', 'Outreach', 'Teachers open the door to classes', 'Find the number; Call; Ask for 10 minutes with one class', 'Name + date of the class visit', 'Ann — school list', 'School list | https://example.com/list']]);
+  const example = csvBuild([COLS, ['Call the IT teacher at School 110', ctx.D.team[0] ? ctx.D.team[0].key : 'ann', '2026-10-12 18:00', '20', 'Outreach', 'Teachers open the door to classes', 'Find the number; Call; Ask for 10 minutes with one class', 'Name + date of the class visit', 'Ann — school list', 'School list | https://example.com/list', '']]);
   const d = drawer({ title: 'Import tasks from CSV', sub: 'From Google Sheets or Excel: File → Download → CSV. One task per row.', wide: true,
     body: `${ctx.isAdmin ? `<div class="seg" role="tablist" style="margin-bottom:14px"><button role="tab" data-mode="add" class="on" aria-selected="true">${icon('plus')} Add new tasks</button><button role="tab" data-mode="sync" aria-selected="false">${icon('refresh')} Update the whole plan</button></div>` : ''}
       <div id="how"></div>

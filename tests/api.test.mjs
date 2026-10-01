@@ -409,3 +409,78 @@ test('update the whole plan: dry run changes nothing, apply keeps status + proof
   assert.equal(ann.length, 1, 'one message per person'); assert.match(ann[0].subject, /task plan was updated/i);
   assert.match(ann[0].body, /1 new · 1 removed · 1 new date/); assert.match(ann[0].body, /T002 Brand new/, 'next up uses the new numbers');
 });
+
+test('files: links (Canva, Sheets…) for leads, what each task needs, private links hidden from guests', () => {
+  const h = setupHub({ starter: false });
+  const lead = h.addPerson({ name: 'Omar Lead', access: 'lead' }), mem = h.addPerson({ name: 'Lina Member' }), guest = h.addPerson({ name: 'Rivera Guest', access: 'viewer' });
+  assert.equal(h.as(mem, { action: 'resource.save', resource: { title: 'X', url: 'https://example.com' } }).code, 'forbidden');
+  assert.equal(h.as(lead, { action: 'resource.save', resource: { title: 'Bad', url: 'javascript:alert(1)' } }).ok, false);
+  const r1 = h.as(lead, { action: 'resource.save', resource: { title: 'Flyer (UZ) — edit', url: 'https://www.canva.com/d/abc', section: 'Posters & flyers' } });
+  assert.equal(r1.ok, true, r1.error); assert.equal(r1.resource.kind, 'canva'); assert.equal(r1.resource.id, 'r1');
+  const bulk = h.as(h.admin, { action: 'resource.save', resources: [
+    { id: 'schools-tracker', title: 'Schools tracker', url: 'https://docs.google.com/spreadsheets/d/xyz/edit', section: 'Trackers', private: true },
+    { id: 'brand-guide', title: 'Brand guide', url: 'https://www.figma.com/design/abc/Brand' }] });
+  assert.equal(bulk.ok, true, bulk.error); assert.equal(bulk.resources.length, 3);
+  assert.equal(bulk.resources.find(r => r.id === 'schools-tracker').kind, 'sheet');
+  // re-importing the same ids updates them, no duplicates
+  assert.equal(h.as(h.admin, { action: 'resource.save', resources: [{ id: 'brand-guide', title: 'HQ brand guide', url: 'https://www.figma.com/design/abc/Brand' }] }).resources.length, 3);
+  // tasks list what they need: Files ids and gh: paths in the team files repo
+  assert.equal(h.as(lead, { action: 'task.add', task: { title: 'Bad ref', owner: mem.key, due: future(3), resources: ['nope'] } }).ok, false);
+  assert.equal(h.as(lead, { action: 'task.add', task: { title: 'Bad path', owner: mem.key, due: future(3), resources: ['gh:../secret'] } }).ok, false);
+  const t = h.as(lead, { action: 'task.add', task: { title: 'Print the flyers', owner: mem.key, due: future(3), resources: ['r1', 'schools-tracker', 'gh:posters-and-flyers/', 'gh:brand-kit/logos/haven-logo.png', 'r1'] } });
+  assert.equal(t.ok, true, t.error);
+  assert.deepEqual(t.task.resources.map(r => r.ref), ['r1', 'schools-tracker', 'gh:posters-and-flyers/', 'gh:brand-kit/logos/haven-logo.png']);
+  assert.equal(t.task.resources[2].folder, true); assert.equal(t.task.resources[2].path, 'posters-and-flyers');
+  assert.equal(t.task.resources[3].title, 'haven-logo.png'); assert.equal(t.task.resources[0].kind, 'canva');
+  // the owner sees them; a guest sees the task without the private tracker, and no private links in Files
+  assert.equal(h.get(mem, { action: 'me' }).tasks.find(x => x.id === t.task.id).resources.length, 4);
+  const g = h.get(guest, { action: 'me' });
+  assert.equal(g.all.find(x => x.id === t.task.id).resources.some(r => r.private), false);
+  assert.equal(g.resources.some(r => r.id === 'schools-tracker'), false);
+  assert.equal(h.get(guest, { action: 'files.list' }).resources.some(r => r.private), false);
+  assert.equal(h.get(mem, { action: 'files.list' }).resources.length, 3);
+  // the team files repo is a setting (a pasted GitHub address is tidied up)
+  assert.equal(h.as(h.admin, { action: 'settings.save', values: { files_repo: 'not a repo' } }).ok, false);
+  assert.equal(h.as(h.admin, { action: 'settings.save', values: { files_repo: 'https://github.com/team/haven-team-files.git' } }).settings.files_repo, 'team/haven-team-files');
+  assert.deepEqual(h.get(mem, { action: 'me' }).files, { repo: 'team/haven-team-files', branch: 'main', server: false });
+  assert.ok(h.get(mem, { action: 'me' }).features.includes('files'));
+  // changing what a task needs keeps working; deleting a link that tasks use asks first
+  assert.equal(h.as(lead, { action: 'task.edit', task: { id: t.task.id, resources: ['r1'] } }).task.resources.length, 1);
+  const del = h.as(lead, { action: 'resource.delete', id: 'r1' });
+  assert.equal(del.ok, false); assert.equal(del.code, 'used');
+  assert.deepEqual(h.as(lead, { action: 'resource.delete', id: 'r1', force: true }).tasks, [t.task.id]);
+  assert.equal(h.get(mem, { action: 'me' }).tasks.find(x => x.id === t.task.id).resources.length, 0);
+  assert.equal(h.get(h.admin, { action: 'export' }).data.Resources.length, 2);
+});
+
+test('relink: task links into an old repo move to Files, nobody is told, the rest stays', () => {
+  const h = setupHub({ starter: false });
+  const mem = h.addPerson({ name: 'Lina Member' });
+  h.as(h.admin, { action: 'resource.save', resource: { id: 'schools-tracker', title: 'Schools tracker', url: 'https://docs.google.com/spreadsheets/d/xyz/edit' } });
+  const OLD = 'https://github.com/someone/old-files';
+  const t = h.as(h.admin, { action: 'task.add', notify: false, task: { title: 'Call schools', owner: mem.key, due: future(2), links: [
+    `Schools tracker | ${OLD}/blob/main/trackers/schools-tracker.csv`,
+    `Flyers | ${OLD}/tree/main/design/flyers`,
+    `Old readme | ${OLD}/blob/main/README.md`,
+    `Talk (UZ) | ${OLD}/blob/main/Claude%20outputs/Haven%20%E2%80%94%20School%20Talk%20(UZ).pdf`,
+    'HQ video | https://cdn.hackclub.com/x/Haven.mp4',
+    `Unknown | ${OLD}/blob/main/somewhere/else.md`].join('\n') } }).task;
+  const map = { 'trackers/schools-tracker.csv': 'schools-tracker', 'design/flyers/': 'gh:posters-and-flyers/', 'README.md': '',
+    'Claude outputs/Haven — School Talk (UZ).pdf': 'https://example.com/talk-uz.pdf' };
+  assert.equal(h.as(h.admin, { action: 'task.relink', prefix: OLD, map: { x: 'not-a-thing' } }).ok, false);
+  const dry = h.as(h.admin, { action: 'task.relink', prefix: OLD + '/', map, dryRun: true });
+  assert.equal(dry.ok, true, dry.error);
+  assert.deepEqual([dry.tasks, dry.moved, dry.rewritten, dry.dropped], [1, 2, 1, 1]);
+  assert.deepEqual(dry.unmapped, [{ task: t.id, path: 'somewhere/else.md' }]);
+  assert.equal(h.get(mem, { action: 'me' }).tasks[0].links.length, 6, 'a dry run changes nothing');
+  const msgs = h.gas._telegram.length + h.gas._mails.length;
+  assert.equal(h.as(h.admin, { action: 'task.relink', prefix: OLD, map }).ok, true);
+  const after = h.get(mem, { action: 'me' }).tasks[0];
+  assert.deepEqual(after.resources.map(r => r.ref), ['schools-tracker', 'gh:posters-and-flyers/']);
+  assert.deepEqual(after.links.map(l => l.label), ['Talk (UZ)', 'HQ video', 'Unknown']);
+  assert.equal(after.links[0].url, 'https://example.com/talk-uz.pdf');
+  assert.equal(h.gas._telegram.length + h.gas._mails.length, msgs, 'nobody is messaged');
+  // the plan CSV round-trips the new column
+  const sync = h.as(h.admin, { action: 'task.sync', dryRun: true, rows: [{ id: after.id, title: after.title, owner: mem.key, due: after.due, resources: 'schools-tracker' }] });
+  assert.equal(sync.ok, true, sync.error); assert.equal(sync.updated, 1);
+});
