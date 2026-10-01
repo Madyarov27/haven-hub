@@ -53,13 +53,15 @@ export const ctx = {
   go(r) { if (route() === r) render(); else location.hash = '#/' + r; },
   render: () => render(),
   refresh: (o) => load(o),
-  nameOf(k) { const p = ((this.D && (this.D.people || this.D.team)) || []).find(x => x.key === k); return p ? p.name : k; },
+  nameOf(k) { if (!k) return 'Unassigned'; const p = ((this.D && (this.D.people || this.D.team)) || []).find(x => x.key === k); return p ? p.name : k; },
+  get hasUnassigned() { return ((this.D && this.D.features) || []).includes('unassigned'); },
   /** Replace a task in every local list after the server returns it. */
   patchTask(t) {
     const D = this.D;
     [D.tasks, D.all].forEach(list => { if (!list) return; const i = list.findIndex(x => x.id === t.id); if (i >= 0) list[i] = t; else if (list === D.all) list.push(t); });
     if (D.tasks && t.owner === D.me.key && !D.tasks.some(x => x.id === t.id)) D.tasks.push(t);
     if (D.tasks && t.owner !== D.me.key) D.tasks = D.tasks.filter(x => x.id !== t.id);
+    if (D.open) { D.open = D.open.filter(x => x.id !== t.id); if (!t.owner && !['Done', 'Dropped'].includes(t.status)) D.open.push(t); }
     api.cache(D);
   },
   removeTasks(ids) { const D = this.D; D.all = (D.all || []).filter(t => !ids.includes(t.id)); D.tasks = D.tasks.filter(t => !ids.includes(t.id)); api.cache(D); },

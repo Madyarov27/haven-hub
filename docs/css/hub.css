@@ -534,3 +534,8 @@ input[readonly] { background: var(--line-2); }
 .pk-row > span:last-child { display: flex; flex-direction: column; min-width: 0; }
 .pk-row small { color: var(--muted); font-weight: 700; font-size: 12px; overflow-wrap: anywhere; }
 @media (max-width: 640px) { .ftiles { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); } .fthumb { height: 100px; } .need-t b { max-width: 180px; } }
+
+/* People: inline access + area */
+.tbl input.inl, .tbl select.inl { font: 700 13px var(--font); border: 1px solid transparent; background: transparent; border-radius: 8px; padding: 4px 6px; min-width: 0; width: 100%; max-width: 160px; color: inherit; }
+.tbl input.inl:hover, .tbl input.inl:focus { border-color: var(--line); background: #fff; }
+.tbl select.inl.pill { width: auto; padding: 3px 8px; cursor: pointer; }

@@ -17,10 +17,12 @@ export function myTasks(ctx) {
     <div class="muted"><b>${esc(me.role || '')}</b>${me.area ? ' · ' + esc(me.area) : ''} · this page shows only your tasks</div>${me.one ? `<p style="margin:6px 0 0">${esc(me.one)}</p>` : ''}</div></div></div>`;
   if (!me.telegram && !me.email && me.notify !== 'none') h += `<div class="banner info">${icon('bell')}<div>Get a reminder the evening before each deadline: <a href="#/profile">connect Telegram or add your email</a>.</div></div>`;
   h += `<div class="kpis">${kpi('overdue', over.length, { tone: over.length ? 'bad' : '', icon: 'alert' })}${kpi('due this week', week.length, { icon: 'calendar' })}${kpi('done', done.length, { tone: 'ok', icon: 'check' })}${kpi('of my tasks done', pct + '%', { icon: 'award' })}</div>`;
-  if (!ts.length) h += `<div class="card">${empty({ title: 'No tasks yet', text: 'When your lead gives you a task it shows up here — with the steps, the deadline and who to ask.' })}</div>`;
+  if (!ts.length && !(D.open || []).length) h += `<div class="card">${empty({ title: 'No tasks yet', text: 'When your lead gives you a task it shows up here — with the steps, the deadline and who to ask.' })}</div>`;
   if (over.length) h += `<h3 class="section-t">${icon('alert')} Overdue — finish it, or press “I'm blocked”</h3>` + over.map((t, i) => card(t, i, true)).join('');
   if (open.length) h += `<h3 class="section-t">This week</h3>` + (week.length ? week.map((t, i) => card(t, i, !over.length)).join('') : `<p class="muted">Nothing due in the next 7 days.</p>`);
   if (later.length) h += `<h3 class="section-t">Later</h3>` + later.map((t, i) => card(t, i, false)).join('');
+  const grabs = ctx.hasUnassigned ? (D.open || []).slice().sort(byDue) : [];
+  if (grabs.length) h += `<h3 class="section-t">${icon('inbox')} Up for grabs — nobody has these yet</h3>${D.selfClaim ? '' : '<p class="small muted">Want one? Ask a lead to give it to you.</p>'}` + grabs.map(t => taskCard(ctx, t, { take: D.selfClaim })).join('');
   if (done.length) h += `<h3 class="section-t">Done (${done.length})</h3>` + done.slice().reverse().map((t, i) => card(t, i, false)).join('');
   if (me.ask || me.weekend || me.backup) {
     h += `<div class="grid-2" style="margin-top:22px">`;

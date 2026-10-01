@@ -46,6 +46,8 @@ export function seed(be, gas, hub) {
     power: add('Count power strips + extension cords', 'jonas', day(8), { area: 'Operations', mins: 30 }),
     mentors: add('Confirm 6 mentors for Saturday', 'omar', day(4), { area: 'Program', mins: 120 }),
     workshop: add('Run the workshop test run with 5 friends', 'omar', day(14), { area: 'Program', mins: 180 }),
+    helpers: add('Find 2 more check-in helpers for Saturday morning', '-', day(6), { area: 'Operations', why: 'Check-in is the busiest hour of the weekend.', done_when: 'Two names + phone numbers in the volunteers sheet' }),
+    sticker: add('Design a sticker for the welcome pack', '-', day(11), { area: 'Design', resources: ['brand-guide'] }),
   };
   // progress
   const st = (who, id, status, extra) => ok(as(P[who] || admin, Object.assign({ action: 'status', id, status }, extra || {})), id + ' ' + status);

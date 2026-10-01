@@ -15,7 +15,7 @@
  * The URL stays the same. Secrets never go in this file: personal tokens live in the Sheet, the bot token in Script properties.
  */
 
-const HUB_VERSION = '4.3.0';
+const HUB_VERSION = '4.4.0';
 // On your own server (server/index.mjs) this same file runs on Node; HUB_SERVER is then provided by the server.
 const SELF_HOSTED = typeof HUB_SERVER !== 'undefined' && !!HUB_SERVER;
 const DEFAULT_SITE = 'https://notazizelse.github.io/haven-hub';
@@ -40,7 +40,7 @@ const TABS = {
 };
 const STATUSES = ['Not started', 'In progress', 'Blocked', 'Done', 'Dropped'];
 /** What this backend can do. The website shows a feature only when the hub lists it (Apps Script hubs update Code.gs when they get round to it). */
-const FEATURES = ['files'];
+const FEATURES = ['files', 'unassigned'];
 const ACCESS = ['admin', 'lead', 'member', 'viewer'];
 const RANK = { viewer: 0, member: 1, lead: 2, admin: 3 };
 const NEED = { any: 0, member: 1, lead: 2, admin: 3 };
@@ -77,8 +77,9 @@ const SETTINGS = [
   ['moved_to', '', 'Set when the hub moved to its own server: every request is sent to this address. Clear it to switch this Sheet back on'],
   ['files_repo', '', 'Public GitHub repo with your team files (posters, logos, slides), as owner/repo — shown on the Files page'],
   ['files_branch', 'main', 'Branch of that repo'],
+  ['self_claim', 'yes', 'Team members can take unassigned tasks themselves ("Take this task")'],
 ];
-const YESNO = ['weekly_report', 'email_reminders', 'done_alerts', 'group_done_posts', 'change_alerts', 'public_page', 'public_show_progress', 'public_show_team', 'join_form'];
+const YESNO = ['weekly_report', 'email_reminders', 'done_alerts', 'group_done_posts', 'change_alerts', 'public_page', 'public_show_progress', 'public_show_team', 'join_form', 'self_claim'];
 const URL_KEYS = ['site_url', 'signup_url', 'instagram', 'telegram_channel', 'website', 'moved_to'];
 
 /** Optional starter checklist added at setup. Days are relative to event_start. Edit or delete freely. */
@@ -302,7 +303,10 @@ function person_(token) {
 }
 function first_(p) { return String(p.name || '').split(' ')[0]; }
 function tag_(p) { return /^@\w+/.test(p.handle || '') ? ' ' + p.handle : ''; }
-function nameOf_(key) { const p = people_().find(x => x.key === key); return p ? p.name : key; }
+function nameOf_(key) { if (!key) return 'Unassigned'; const p = people_().find(x => x.key === key); return p ? p.name : key; }
+/** "-" or "unassigned" as an owner = nobody yet: anyone on the team can take it ("Take this task"). */
+function isUnassigned_(v) { return /^(-|unassigned)$/i.test(String(v == null ? '' : v).trim()); }
+const NOBODY = { key: '', name: 'Unassigned' };
 function newToken_() { return Utilities.getUuid().replace(/-/g, ''); }
 /** Password sign-in exists only on your own server (server/accounts.mjs): { username } or null. */
 function account_(p) { return SELF_HOSTED && p && p.key && typeof HUB_SERVER.account === 'function' ? HUB_SERVER.account(p.key) : null; }
@@ -377,7 +381,7 @@ function addTasks_(me, b) {
   const owners = (Array.isArray(x.owners) && x.owners.length ? x.owners : [x.owner]).map(v => String(v || '')).filter(Boolean);
   taskFields_(x, base, errs, true);
   if (!owners.length) errs.push('Choose who owns the task.');
-  const ps = owners.map(k => { const p = ownerFor_(k); if (!p) errs.push('Unknown owner: ' + k); return p; });
+  const ps = owners.map(k => { const p = isUnassigned_(k) ? NOBODY : ownerFor_(k); if (!p) errs.push('Unknown owner: ' + k); return p; });
   if (errs.length) return { ok: false, error: errs[0], errors: errs };
   let n = nextNum_();
   const now = now_(), made = ps.slice(0, 50).map(p => Object.assign({}, base, { id: idFor_(n++), owner: p.key, created_by: me.key, updated_at: now }));
@@ -389,6 +393,9 @@ function addTasks_(me, b) {
 }
 /** One line in the organizer group about new tasks (owners hear about them through the change alerts). */
 function groupNew_(tasks) {
+  const open = tasks.filter(t => !t.owner);
+  if (open.length) postGroup_(`📭 Up for grabs — anyone can take ${open.length === 1 ? 'it' : 'them'} in the Team Hub (Take this task):\n` + open.slice(0, 10).map(t => `• ${t.id} ${t.title} (due ${t.due})`).join('\n') + (open.length > 10 ? `\n…and ${open.length - 10} more` : ''));
+  tasks = tasks.filter(t => t.owner);
   if (!tasks.length) return;
   const by = {};
   tasks.forEach(t => { (by[t.owner] = by[t.owner] || []).push(t); });
@@ -400,7 +407,7 @@ function editTask_(me, b) {
   if (!t) return { ok: false, error: 'No such task.' };
   const errs = [], before = snap_(t), prevOwner = t.owner;
   taskFields_(x, t, errs, false);
-  if (x.owner !== undefined && x.owner !== t.owner) { const p = ownerFor_(x.owner); if (!p) errs.push('Unknown owner: ' + x.owner); else t.owner = p.key; }
+  if (x.owner !== undefined && x.owner !== t.owner) { const p = isUnassigned_(x.owner) ? NOBODY : ownerFor_(x.owner); if (!p) errs.push('Unknown owner: ' + x.owner); else t.owner = p.key; }
   if (x.status !== undefined && x.status !== t.status) {
     if (STATUSES.indexOf(x.status) < 0) errs.push('Unknown status.');
     else { t.status = x.status; if (x.status === 'Done' && !t.done_at) t.done_at = now_(); if (x.status !== 'Done') { t.done_at = ''; t.review = ''; t.reviewed_by = ''; } }
@@ -419,7 +426,7 @@ function bulkTasks_(me, b) {
   const before = tasks.map(snap_);
   let note = '', moved = [];
   if (op === 'reassign') {
-    const p = ownerFor_(b.owner); if (!p) return { ok: false, error: 'Choose a new owner.' };
+    const p = isUnassigned_(b.owner) ? NOBODY : ownerFor_(b.owner); if (!p) return { ok: false, error: 'Choose a new owner.' };
     moved = tasks.filter(t => t.owner !== p.key); moved.forEach(t => { t.owner = p.key; });
     note = 'to ' + p.key; if (moved.length) { moved.forEach(t => { t.updated_at = now_(); }); writeMany_('Tasks', moved); }
   } else if (op === 'shift') {
@@ -443,8 +450,8 @@ function importTasks_(me, b) {
   rows.forEach((x, i) => {
     const e = [], t = { status: 'Not started' };
     taskFields_(x || {}, t, e, true);
-    const p = ownerFor_(x && x.owner);
-    if (!p) e.push(x && x.owner ? `Unknown owner "${String(x.owner).slice(0, 30)}"` : 'Owner is missing');
+    const p = x && isUnassigned_(x.owner) ? NOBODY : ownerFor_(x && x.owner);
+    if (!p) e.push(x && x.owner ? `Unknown owner "${String(x.owner).slice(0, 30)}"` : 'Owner is missing (write "-" for unassigned)');
     if (e.length) errors.push({ row: i + 1, errors: e }); else made.push(Object.assign(t, { owner: p.key }));
   });
   if (b.dryRun || errors.length) return { ok: !errors.length, dryRun: !!b.dryRun, count: made.length, errors: errors, error: errors.length ? `${errors.length} row(s) have problems` + (b.dryRun ? ' — fix them and check again.' : ' — nothing was imported.') : '' };
@@ -484,8 +491,8 @@ function syncTasks_(me, b) {
     if (id) seen[id] = true;
     const t = cur ? Object.assign({}, cur) : { status: 'Not started' };
     taskFields_(x, t, e, !cur);
-    const p = ownerFor_(x.owner);
-    if (!p) e.push(x.owner ? `Unknown owner "${String(x.owner).slice(0, 30)}"` : 'Owner is missing'); else t.owner = p.key;
+    const p = isUnassigned_(x.owner) ? NOBODY : ownerFor_(x.owner);
+    if (!p) e.push(x.owner ? `Unknown owner "${String(x.owner).slice(0, 30)}"` : 'Owner is missing (write "-" for unassigned)'); else t.owner = p.key;
     if (e.length) errors.push({ row: i + 1, errors: e }); else plan.push({ cur: cur, t: t });
   });
   if (errors.length) return { ok: false, dryRun: !!b.dryRun, errors: errors, error: `${errors.length} row(s) have problems — fix them and check again. Nothing was changed.` };
@@ -760,6 +767,7 @@ function sendChanges_(items) {
     const p = people.find(q => q.key === k), list = groups[k];
     lines[k] = changeLines_(list);
     if (!lines[k].length) return;
+    if (!k) { how[k] = 'open'; return; }
     if (!p || p.active === 'no') { how[k] = 'gone'; return; }
     if (isAdmin_(p)) { how[k] = 'admin'; return; } // admins read their own changes in the summary below
     if (list.every(x => x.byKey === k)) { how[k] = 'self'; return; }
@@ -769,7 +777,7 @@ function sendChanges_(items) {
   if (!shown.length) return;
   const plan = items.some(x => x.plan), total = shown.reduce((s, k) => s + lines[k].length, 0), short = plan || total > 30;
   const label = { telegram: 'told on Telegram', email: 'told by email', 'telegram+email': 'told on Telegram + email', '': '⚠️ not reached (no Telegram or email): tell them yourself',
-    self: 'their own change', admin: 'admin, gets this summary', gone: 'not on the team any more' };
+    self: 'their own change', admin: 'admin, gets this summary', gone: 'not on the team any more', open: 'unassigned — anyone can take it' };
   activePeople_().filter(isAdmin_).forEach(a => {
     const who = names(items).map(n => n === a.name ? 'you' : n).join(', ');
     let text = `🧾 ${plan ? 'Task plan updated' : 'Task changes'} by ${who} — ${shown.length} ${shown.length === 1 ? 'person' : 'people'}\n`;
@@ -795,6 +803,18 @@ function changeMessage_(p, list, lines, by) {
 }
 
 /** Start / Done / Blocked / Reopen — by the owner or a lead. Done needs proof, Blocked needs a reason. */
+/** Members take an unassigned task themselves (setting self_claim). Leads are told. */
+function claimTask_(me, b) {
+  if (S_().self_claim === 'no') return { ok: false, error: 'Ask a lead to give you this task.' };
+  const t = rows_('Tasks').find(q => q.id === String(b.id || ''));
+  if (!t) return { ok: false, error: 'No such task.' };
+  if (t.owner) return { ok: false, code: 'taken', error: t.owner === me.key ? 'It is already yours.' : `${nameOf_(t.owner)} took it already.` };
+  if (['Done', 'Dropped'].indexOf(t.status) >= 0) return { ok: false, error: 'That task is closed.' };
+  t.owner = me.key; t.updated_at = now_(); write_('Tasks', t);
+  log_(me.name, t.id, 'Took the task', t.title);
+  notifyLeads_({ text: `🙋 ${me.name} took ${t.id} — ${t.title} (due ${t.due})` }, me.key);
+  return { ok: true, task: taskOut_(t) };
+}
 function setStatus_(me, b) {
   const t = rows_('Tasks').find(x => x.id === b.id);
   if (!t) return { ok: false, error: 'No such task.' };
@@ -941,19 +961,28 @@ function deactivatePerson_(me, b) {
   const p = findPerson_(b.key);
   if (!p) return { ok: false, error: 'No such person.' };
   if (access_(p) === 'admin' && !otherAdmins_(p.key)) return { ok: false, error: 'You can\'t remove the last admin.' };
+  // Their open tasks: b.reassign = { T012: 'ann', T013: '-' } picks a new owner per task; b.reassignTo = everyone else's default; otherwise unassigned.
   let to = null;
-  if (b.reassignTo) { to = ownerFor_(b.reassignTo); if (!to || to.key === p.key) return { ok: false, error: 'Choose who takes over their tasks.' }; }
+  if (b.reassignTo && !isUnassigned_(b.reassignTo)) { to = ownerFor_(b.reassignTo); if (!to || to.key === p.key) return { ok: false, error: 'Choose who takes over their tasks.' }; }
+  const plan = b.reassign && typeof b.reassign === 'object' ? b.reassign : {}, target = {}, bad = [];
+  const open = rows_('Tasks').filter(t => t.owner === p.key && ['Done', 'Dropped'].indexOf(t.status) < 0);
+  open.forEach(t => {
+    const want = Object.prototype.hasOwnProperty.call(plan, t.id) ? plan[t.id] : to ? to.key : '-';
+    const q = isUnassigned_(want) || !want ? NOBODY : ownerFor_(want);
+    if (!q || q.key === p.key) bad.push(t.id); else target[t.id] = q.key;
+  });
+  if (bad.length) return { ok: false, error: `Pick someone else for ${bad.slice(0, 5).join(', ')} (or leave it unassigned).` };
   p.active = 'no'; p.chat_id = ''; p.token = ''; write_('People', p);
   dropAccount_(p);
-  const open = rows_('Tasks').filter(t => t.owner === p.key && ['Done', 'Dropped'].indexOf(t.status) < 0);
-  if (to && open.length) {
-    const before = open.map(snap_);
-    open.forEach(t => { t.owner = to.key; t.updated_at = now_(); }); writeMany_('Tasks', open);
+  if (open.length) {
+    const before = open.map(snap_), now = now_();
+    open.forEach(t => { t.owner = target[t.id]; t.updated_at = now; }); writeMany_('Tasks', open);
     tellChanges_(me, open.map((t, i) => [before[i], snap_(t)]), b); groupNew_(open);
   }
-  log_(me.name, '', 'Person removed', p.name + (to ? ` — ${open.length} open task(s) to ${to.name}` : ''));
+  const given = open.filter(t => t.owner).length;
+  log_(me.name, '', 'Person removed', p.name + (open.length ? ` — ${given} open task(s) handed over, ${open.length - given} unassigned` : ''));
   refreshLinks();
-  return { ok: true, person: personOut_(p), moved: to ? open.length : 0 };
+  return { ok: true, person: personOut_(p), moved: given, unassigned: open.length - given };
 }
 function reactivatePerson_(me, b) {
   const p = findPerson_(b.key);
@@ -1139,6 +1168,7 @@ const ACTIONS = {
   tgdisconnect: { level: 'any', post: true, lock: true, fn: tgDisconnect_ },
   photo: { level: 'member', fn: (me, q) => photoOut_(me, String(q.id || '')) },
   status: { level: 'member', post: true, lock: true, fn: setStatus_ },
+  'task.claim': { level: 'member', post: true, lock: true, fn: claimTask_ },
   upload: { level: 'member', post: true, lock: true, fn: uploadProof_ },
   prefs: { level: 'member', post: true, lock: true, fn: savePrefs_ },
   review: { level: 'lead', post: true, lock: true, fn: reviewTask_ },
@@ -1237,6 +1267,8 @@ function apiMe_(me, q) {
     bot: prop_('BOT_USERNAME').replace(/^@/, ''),
     team: ppl.filter(p => access_(p) !== 'viewer').map(p => ({ key: p.key, name: p.name, role: p.role, area: p.area, access: access_(p), handle: lvl === 'viewer' ? '' : p.handle, one: p.one })),
     tasks: lvl === 'viewer' ? [] : all.filter(t => t.owner === me.key).map(taskOut_),
+    open: lvl === 'viewer' ? [] : all.filter(t => !t.owner && ['Done', 'Dropped'].indexOf(t.status) < 0).map(taskOut_),
+    selfClaim: S.self_claim !== 'no',
     rules: rules_(), meetings: meetings_(), milestones: milestones_(),
     publicLink: publicLink_(),
     features: FEATURES,
@@ -1545,13 +1577,15 @@ function progressText_() {
   const dn = rowsP.reduce((s, r) => s + r.done, 0), tot = rowsP.reduce((s, r) => s + r.total, 0);
   let s = `📈 Progress — ${nowS}\nTeam: ${dn} of ${tot} tasks done (${tot ? Math.round(100 * dn / tot) : 0}%)\n`;
   rowsP.forEach(r => { s += `\n${r.over || r.blk ? '🔴' : r.done === r.total && r.total ? '✅' : '🟢'} ${first_(r.p)}: ${r.done}/${r.total} done` + (r.prog ? ` · ${r.prog} in progress` : '') + (r.over ? ` · ${r.over} overdue` : '') + (r.blk ? ` · ${r.blk} blocked` : ''); });
+  const nobody = tasks.filter(t => !t.owner && t.status !== 'Done');
+  if (nobody.length) s += `\n📭 Unassigned: ${nobody.length} open task(s) — give them to someone, or let people take them`;
   return s;
 }
 /** Team-wide picture by person NAME: group digest, /team and the leads' daily summary. */
 function summaryText_() {
   const nowS = now_(), tasks = rows_('Tasks').filter(t => ['Done', 'Dropped'].indexOf(t.status) < 0), tmr = fmt_(new Date(Date.now() + 864e5), 'yyyy-MM-dd');
   const over = tasks.filter(t => t.due < nowS), blocked = tasks.filter(t => t.status === 'Blocked'), soon = tasks.filter(t => t.due >= nowS && t.due.slice(0, 10) === tmr);
-  const who = k => { const p = people_().find(x => x.key === k); return p ? p.name + tag_(p) : k; };
+  const who = k => { if (!k) return 'Unassigned'; const p = people_().find(x => x.key === k); return p ? p.name + tag_(p) : k; };
   let s = `📊 ${event_()} — ${nowS}\nOverdue: ${over.length} · Blocked: ${blocked.length} · Due tomorrow: ${soon.length}`;
   if (blocked.length) s += '\n\n🔴 Blocked:\n' + blocked.map(t => `• ${who(t.owner)} — ${t.id} ${t.title}: ${t.blocked_reason}`).join('\n');
   if (over.length) s += '\n\n⏰ Overdue:\n' + over.slice(0, 15).map(t => `• ${who(t.owner)} — ${t.id} ${t.title} (was ${t.due})`).join('\n');

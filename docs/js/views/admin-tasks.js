@@ -13,7 +13,7 @@ function filtered(ctx) {
     if (F.status === 'open' && !OPEN(t)) return false;
     if (F.status === 'review' && !(t.status === 'Done' && !t.review)) return false;
     if (!['open', 'review', ''].includes(F.status) && t.status !== F.status) return false;
-    if (F.owner && t.owner !== F.owner) return false;
+    if (F.owner && t.owner !== (F.owner === '-' ? '' : F.owner)) return false;
     if (F.area && (t.area || '') !== F.area) return false;
     if (F.due) {
       const d = parseLocal(t.due, tz);
@@ -29,9 +29,11 @@ function filtered(ctx) {
   });
 }
 const areasOf = ctx => [...new Set((ctx.D.all || []).map(t => t.area).concat(ctx.D.team.map(p => p.area)).filter(Boolean))].sort();
-const teamOpts = (ctx, v, any) => (any ? `<option value="">${any}</option>` : '') + ctx.D.team.map(p => `<option value="${esc(p.key)}" ${p.key === v ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+const teamOpts = (ctx, v, any) => (any ? `<option value="">${any}</option>` : '') + (ctx.hasUnassigned ? `<option value="-" ${v === '-' ? 'selected' : ''}>— Unassigned —</option>` : '') + ctx.D.team.map(p => `<option value="${esc(p.key)}" ${p.key === v ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
 
 export function tasksAdmin(ctx) {
+  const hq = new URLSearchParams(location.hash.split('?')[1] || '');
+  if (hq.has('owner')) { F.owner = hq.get('owner'); F.status = 'open'; history.replaceState(null, '', '#/admin/tasks'); }
   const act = ctx.setActions(`<button class="btn ghost" id="exp" title="Export every task as CSV">${icon('download')}<span class="hide-sm">Export CSV</span></button><button class="btn ghost" id="imp" title="Import CSV">${icon('upload')}<span class="hide-sm">Import CSV</span></button><button class="btn primary" id="new">${icon('plus')} New task</button>`);
   $('#new', act).onclick = () => taskDrawer(ctx, null);
   $('#imp', act).onclick = () => importDrawer(ctx);
@@ -63,7 +65,7 @@ function drawTable(ctx) {
       return `<tr class="click ${sel.has(t.id) ? 'sel' : ''} ${t.status === 'Dropped' ? 'dim' : ''}" data-id="${esc(t.id)}">
         <td class="cb"><input type="checkbox" data-sel="${esc(t.id)}" ${sel.has(t.id) ? 'checked' : ''} aria-label="Select ${esc(t.title)}"></td>
         <td><div class="t-title">${esc(t.title)}</div><div class="t-sub">${esc(t.id)}${t.area ? ' · ' + esc(t.area) : ''}${t.steps.length ? ` · ${t.steps.length} steps` : ''}</div></td>
-        <td data-l="Owner"><span class="who-cell">${avatar(ctx.nameOf(t.owner), 'sm')}<span>${esc(ctx.nameOf(t.owner))}</span></span></td>
+        <td data-l="Owner">${t.owner ? `<span class="who-cell">${avatar(ctx.nameOf(t.owner), 'sm')}<span>${esc(ctx.nameOf(t.owner))}</span></span>` : '<span class="pill">Unassigned</span>'}</td>
         <td data-l="Due" class="nowrap"><span class="due ${di.cls}">${esc(fmtDue(t.due))}</span>${di.over || di.soon ? `<div class="t-sub due ${di.cls}">${esc(di.label)}</div>` : ''}</td>
         <td>${pill(t.status)}</td><td class="hide-sm">${reviewPill(t)}</td></tr>`;
     }).join('') + `</tbody></table></div>` : `<div style="padding:10px 20px 20px">${empty({ title: 'No tasks match', text: 'Change the filters, or add a task.', action: `<button class="btn primary" id="new2">${icon('plus')} New task</button>` })}</div>`;
@@ -121,8 +123,9 @@ export function taskDrawer(ctx, id, preset) {
   const hasFiles = (D.features || []).includes('files');
   const [dd, tt] = [String(x.due || '').slice(0, 10), String(x.due || '').slice(11, 16) || '20:00'];
   const areas = areasOf(ctx);
-  const owners = t ? field({ label: 'Owner', name: 'owner', type: 'select', value: x.owner, options: D.team.map(p => [p.key, p.name]), full: true })
-    : `<div class="field full"><label>Who does it? <span class="req">*</span></label><div class="checks">${D.team.map(p => `<label><input type="checkbox" name="owners" value="${esc(p.key)}" data-multi="1" ${(preset && preset.owner === p.key) ? 'checked' : ''}>${esc(p.name)}</label>`).join('')}</div><small class="hint">Pick several people to give each of them their own copy.</small></div>`;
+  const un = ctx.hasUnassigned ? [['-', '— Unassigned (anyone can take it) —']] : [];
+  const owners = t ? field({ label: 'Owner', name: 'owner', type: 'select', value: x.owner || '-', options: un.concat(D.team.map(p => [p.key, p.name])), full: true })
+    : `<div class="field full"><label>Who does it? <span class="req">*</span></label><div class="checks">${D.team.map(p => `<label><input type="checkbox" name="owners" value="${esc(p.key)}" data-multi="1" ${(preset && preset.owner === p.key) ? 'checked' : ''}>${esc(p.name)}</label>`).join('')}${ctx.hasUnassigned ? `<label><input type="checkbox" name="owners" value="-" data-multi="1"><i>Unassigned — anyone can take it</i></label>` : ''}</div><small class="hint">Pick several people to give each of them their own copy.</small></div>`;
   const body = `<form id="tf" class="form-grid" autocomplete="off">
     ${field({ label: 'Title — start with a verb', name: 'title', value: x.title, required: true, placeholder: 'Put up 3 posters at School 110', full: true, attrs: 'maxlength="200" autofocus' })}
     ${owners}

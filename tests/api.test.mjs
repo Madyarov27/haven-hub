@@ -484,3 +484,47 @@ test('relink: task links into an old repo move to Files, nobody is told, the res
   const sync = h.as(h.admin, { action: 'task.sync', dryRun: true, rows: [{ id: after.id, title: after.title, owner: mem.key, due: after.due, resources: 'schools-tracker' }] });
   assert.equal(sync.ok, true, sync.error); assert.equal(sync.updated, 1);
 });
+
+test('unassigned tasks: leads create them, members take them, reminders and alerts skip them', () => {
+  const h = setupHub({ starter: false });
+  const ann = h.addPerson({ name: 'Ann Member' }), ben = h.addPerson({ name: 'Ben Member' }), guest = h.addPerson({ name: 'Gil Guest', access: 'viewer' });
+  const a = h.as(h.admin, { action: 'task.add', task: { title: 'Hang posters at School 9', owners: ['-'], due: future(2) } });
+  assert.equal(a.ok, true, a.error); assert.equal(a.task.owner, '');
+  const me = h.get(ann, { action: 'me' });
+  assert.deepEqual(me.open.map(t => t.id), [a.task.id]); assert.equal(me.selfClaim, true); assert.ok(me.features.includes('unassigned'));
+  assert.deepEqual(h.get(guest, { action: 'me' }).open, []);
+  assert.equal(h.as(guest, { action: 'task.claim', id: a.task.id }).ok, false);
+  const took = h.as(ann, { action: 'task.claim', id: a.task.id });
+  assert.equal(took.ok, true, took.error); assert.equal(took.task.owner, ann.key);
+  const again = h.as(ben, { action: 'task.claim', id: a.task.id });
+  assert.equal(again.ok, false); assert.equal(again.code, 'taken'); assert.match(again.error, /Ann Member took it/);
+  // a lead hands it back to nobody; the setting can switch taking off
+  assert.equal(h.as(h.admin, { action: 'task.edit', task: { id: a.task.id, owner: 'unassigned' } }).task.owner, '');
+  h.as(h.admin, { action: 'settings.save', values: { self_claim: 'no' } });
+  assert.equal(h.as(ben, { action: 'task.claim', id: a.task.id }).ok, false);
+  // import + bulk accept "-" for nobody; an empty owner is still an error
+  const imp = h.as(h.admin, { action: 'task.import', dryRun: true, rows: [{ title: 'Open one', owner: '-', due: future(5) }, { title: 'Oops', owner: '', due: future(5) }] });
+  assert.equal(imp.ok, false); assert.equal(imp.errors.length, 1); assert.equal(imp.errors[0].row, 2);
+  const b2 = h.as(h.admin, { action: 'task.add', task: { title: 'Two', owner: ann.key, due: future(1) } }).task;
+  assert.equal(h.as(h.admin, { action: 'task.bulk', ids: [b2.id], op: 'reassign', owner: '-' }).tasks[0].owner, '');
+  // overdue unassigned tasks show up for leads, never in anyone's personal reminder
+  h.gas._telegram.length = 0; h.gas._mails.length = 0;
+  h.be.call('eveningReminders');
+  assert.equal(h.gas._mails.filter(m => /Ann Member|Ben Member/.test(JSON.stringify(m)) && /Due tomorrow/.test(m.subject || '')).length, 0);
+});
+
+test('removing someone: each open task goes to the person you pick, or stays unassigned', () => {
+  const h = setupHub({ starter: false });
+  const ann = h.addPerson({ name: 'Ann Leaving', backup: 'ben' }), ben = h.addPerson({ name: 'Ben Backup' }), cy = h.addPerson({ name: 'Cy Other' });
+  const add = title => h.as(h.admin, { action: 'task.add', notify: false, task: { title, owner: ann.key, due: future(4) } }).task.id;
+  const t1 = add('One'), t2 = add('Two'), t3 = add('Three');
+  h.as(ann, { action: 'status', id: t3, status: 'Done', proof: 'done' });
+  assert.equal(h.as(h.admin, { action: 'person.deactivate', key: ann.key, reassign: { [t1]: ann.key } }).ok, false, 'not back to the person leaving');
+  const r = h.as(h.admin, { action: 'person.deactivate', key: ann.key, reassign: { [t1]: 'ben' } });
+  assert.equal(r.ok, true, r.error); assert.equal(r.moved, 1); assert.equal(r.unassigned, 1);
+  const all = h.get(h.admin, { action: 'me' }).all;
+  assert.equal(all.find(t => t.id === t1).owner, ben.key);
+  assert.equal(all.find(t => t.id === t2).owner, '');
+  assert.equal(all.find(t => t.id === t3).owner, ann.key, 'finished work keeps its owner');
+  assert.equal(h.get(cy, { action: 'me' }).open.map(t => t.id).includes(t2), true);
+});

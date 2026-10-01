@@ -28,6 +28,7 @@ export function taskCard(ctx, t, opts = {}) {
       ${done && t.proof ? `<div class="proofbox"><b>Proof:</b> ${textProof ? linkify(textProof) : ''}${ids.length ? `<div class="actions" style="margin-top:8px">${ids.map((id, i) => `<button class="btn sm soft" data-file="${esc(id)}">${icon('image')} Show file ${ids.length > 1 ? i + 1 : ''}</button>`).join('')}</div><div class="pimgs"></div>` : ''}${t.done_at ? `<div class="small muted" style="margin-top:4px">Finished ${esc(t.done_at)}</div>` : ''}</div>` : ''}
       ${canReview ? `<div class="actions">${t.review === 'approved' ? `<span class="pill ok">${icon('check')} Approved by ${esc(t.reviewed_by)}</span>` : `<button class="btn ok sm" data-review="ok">${icon('check')} Approve</button>`}<button class="btn soft sm" data-form="redo">Ask for a redo</button></div>
         <div class="sub-form" data-f="redo"><label class="small"><b>What should ${esc(first(ctx.nameOf(t.owner)))} fix?</b></label><textarea placeholder="The photo is blurry — retake it with the whole poster in view."></textarea><div class="actions"><button class="btn primary sm" data-review="redo">${icon('send')} Send — ask for a redo</button></div></div>` : ''}
+      ${opts.take && !t.owner && !ctx.isViewer ? `<div class="actions"><button class="btn go" data-take>${icon('userPlus')} Take this task</button><span class="small muted">It becomes yours; your leads are told.</span></div>` : ''}
       ${canAct ? `<div class="actions">
         ${!done && t.status !== 'In progress' ? `<button class="btn go" data-act="In progress">${icon('play')} Start</button>` : ''}
         ${!done ? `<button class="btn ok" data-form="done">${icon('check')} Done — add proof</button><button class="btn danger ghost" data-form="block">${icon('alert')} I'm blocked</button>` : `<button class="btn ghost sm" data-act="In progress">Reopen</button>`}
@@ -75,6 +76,14 @@ export function wireTasks(el, ctx, onChange) {
       if (!r.ok) { toast(r.error || 'Could not load the file.', 'err'); busy(fl, false); return; }
       box.insertAdjacentHTML('beforeend', /^data:image\//.test(r.data) ? `<img src="${r.data}" alt="Proof for ${esc(id)}">` : `<div style="margin-top:8px"><a class="btn sm ghost" download="${esc(r.name || 'file')}" href="${r.data}">${icon('download')} ${esc(r.name || 'file')}</a></div>`);
       fl.remove(); return;
+    }
+    const tk = e.target.closest('[data-take]');
+    if (tk) {
+      busy(tk, true, 'Taking it…');
+      const r = await ctx.api.post('task.claim', { id });
+      busy(tk, false);
+      if (!r.ok) { toast(r.error || 'Could not take it.', 'err'); if (r.code === 'taken') ctx.refresh({ silent: true }); return; }
+      toast('It\'s yours — it\'s in your list now.'); onChange(r.task); return;
     }
     const rv = e.target.closest('[data-review]');
     if (rv) {

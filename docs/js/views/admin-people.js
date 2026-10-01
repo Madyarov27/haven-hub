@@ -7,8 +7,9 @@ const NOTIFY = [['auto', 'Automatic — Telegram if connected, else email'], ['t
 
 export function people(ctx) {
   const D = ctx.D, all = D.people || [], tz = ctx.tz;
-  const act = ctx.setActions(`<button class="btn ghost" id="addg" title="Add guest">${icon('eye')}<span class="hide-sm">Add guest</span></button><button class="btn primary" id="addp">${icon('userPlus')} Add organizer</button>`);
+  const act = ctx.setActions(`<button class="btn ghost" id="addg" title="Add guest">${icon('eye')}<span class="hide-sm">Add guest</span></button><button class="btn ghost" id="addm" title="Paste a list of names">${icon('users')}<span class="hide-sm">Add several</span></button><button class="btn primary" id="addp">${icon('userPlus')} Add organizer</button>`);
   $('#addp', act).onclick = () => personDrawer(ctx, null, { access: 'member' });
+  $('#addm', act).onclick = () => addMany(ctx);
   $('#addg', act).onclick = () => personDrawer(ctx, null, { access: 'viewer' });
   const groups = { team: all.filter(p => p.active && p.access !== 'viewer'), guests: all.filter(p => p.active && p.access === 'viewer'), removed: all.filter(p => !p.active) };
   const tasks = (D.all || []).filter(t => t.status !== 'Dropped');
@@ -23,18 +24,35 @@ export function people(ctx) {
     $('#ptbl').innerHTML = list.length ? `<div class="tbl-wrap"><table class="tbl stack"><thead><tr><th>Person</th><th>Area</th><th>Access</th><th>Reach</th><th>Tasks</th><th>Last active</th><th class="cb"></th></tr></thead><tbody>${list.map(p => {
       const mine = tasks.filter(t => t.owner === p.key), open = mine.filter(t => !['Done', 'Dropped'].includes(t.status)), over = open.filter(t => dueInfo(t, tz).over);
       return `<tr class="click" data-key="${esc(p.key)}"><td><span class="who-cell">${avatar(p.name)}<span><b>${esc(p.name)}</b><span class="t-sub">${esc(p.role || '—')}</span></span></span></td>
-        <td data-l="Area">${esc(p.area || '—')}</td><td><span class="pill ${esc(p.access)}">${esc(p.access)}</span></td>
+        ${p.active ? `<td data-l="Area"><input class="inl" data-area="${esc(p.key)}" value="${esc(p.area || '')}" list="p-areas" placeholder="—" aria-label="Area of ${esc(p.name)}"></td>
+        <td data-l="Access"><select class="inl pill ${esc(p.access)}" data-acc="${esc(p.key)}" aria-label="Access of ${esc(p.name)}">${ACCESS.map(([v]) => `<option value="${v}" ${v === p.access ? 'selected' : ''}>${v === 'viewer' ? 'guest' : v}</option>`).join('')}</select></td>`
+        : `<td data-l="Area">${esc(p.area || '—')}</td><td><span class="pill ${esc(p.access)}">${esc(p.access)}</span></td>`}
         <td data-l="Reach" class="nowrap">${p.password ? `<span class="pill ok" title="Signs in with a username and password">${icon('key')} password</span> ` : ''}${p.telegram ? `<span class="pill ok" title="Telegram connected">${icon('message')} TG</span> ` : ''}${p.email ? `<span class="pill" title="${esc(p.email)}">${icon('mail')} email</span>` : ''}${!p.telegram && !p.email ? '<span class="muted small">no reminders yet</span>' : ''}</td>
         <td data-l="Tasks" class="nowrap">${p.access === 'viewer' ? '—' : `${open.length} open${over.length ? ` · <span class="due over">${over.length} overdue</span>` : ''}`}</td>
         <td data-l="Last active" class="small muted nowrap">${esc(seen[p.name] ? ago(seen[p.name], tz) : 'never')}</td>
         <td class="cb"><div class="rel"><button class="icon-btn" data-menu="${esc(p.key)}" aria-label="Actions for ${esc(p.name)}">${icon('more')}</button></div></td></tr>`;
-    }).join('')}</tbody></table></div>` : `<div style="padding:0 20px 10px">${empty({ title: tab === 'guests' ? 'No guests yet' : tab === 'removed' ? 'Nobody removed' : 'No organizers match', text: tab === 'guests' ? 'Give HQ, a mentor or a sponsor a read-only link to your progress.' : '' })}</div>`;
+    }).join('')}</tbody></table></div><datalist id="p-areas">${[...new Set(all.map(x => x.area).filter(Boolean))].sort().map(a => `<option value="${esc(a)}">`).join('')}</datalist>` : `<div style="padding:0 20px 10px">${empty({ title: tab === 'guests' ? 'No guests yet' : tab === 'removed' ? 'Nobody removed' : 'No organizers match', text: tab === 'guests' ? 'Give HQ, a mentor or a sponsor a read-only link to your progress.' : '' })}</div>`;
   };
   draw();
   ctx.el.querySelector('.seg').onclick = e => { const b = e.target.closest('[data-tab]'); if (b) { tab = b.dataset.tab; people(ctx); } };
   $('#pq').oninput = debounce(e => { q = e.target.value.trim(); draw(); }, 150);
   $('#hours').onclick = () => hoursCsv(ctx);
+  // inline edits: access and area save as soon as they change
+  $('#ptbl').onchange = async e => {
+    const el = e.target.closest('[data-acc],[data-area]'); if (!el) return;
+    const p = all.find(x => x.key === (el.dataset.acc || el.dataset.area)), patch = el.dataset.acc ? { access: el.value } : { area: el.value.trim() };
+    if (el.dataset.acc && p.access === 'admin' && el.value !== 'admin' && !await confirmBox({ title: `${first(p.name)} stops being an admin?`, text: 'They lose People, Applications and Settings.', ok: 'Change' })) { el.value = p.access; return; }
+    el.disabled = true;
+    const r = await ctx.api.post('person.edit', { person: Object.assign({ key: p.key }, patch) });
+    el.disabled = false;
+    if (!r.ok) { toast(r.error, 'err'); if (el.dataset.acc) el.value = p.access; else el.value = p.area || ''; return; }
+    Object.assign(p, r.person); ctx.api.cache(ctx.D);
+    if (el.dataset.acc) { el.className = 'inl pill ' + p.access; toast(`${first(p.name)} is now ${p.access === 'viewer' ? 'a guest' : 'a ' + p.access}.`); if ((patch.access === 'viewer') !== (r.person.access === 'viewer')) people(ctx); }
+    else toast('Saved.');
+    ctx.refresh({ silent: true });
+  };
   $('#ptbl').onclick = e => {
+    if (e.target.closest('select,input')) return;
     const m = e.target.closest('[data-menu]');
     if (m) { e.stopPropagation(); return rowMenu(ctx, m, all.find(p => p.key === m.dataset.menu)); }
     const tr = e.target.closest('tr[data-key]'); if (tr) personDrawer(ctx, tr.dataset.key);
@@ -63,17 +81,70 @@ function rowMenu(ctx, btn, p) {
       const r = await ctx.api.post('person.resetLink', { key: p.key }); if (!r.ok) return toast(r.error, 'err');
       linkModal(ctx, p, r, 'New link — send it to ' + first(p.name)); ctx.refresh({ silent: true });
     }
-    if (k === 'remove') {
-      const open = (ctx.D.all || []).filter(t => t.owner === p.key && !['Done', 'Dropped'].includes(t.status)).length;
-      const v = await confirmBox({ title: `Remove ${p.name}?`, danger: true, ok: 'Remove',
-        text: `Their link stops working and the bot forgets them. Their finished tasks and history stay.${open ? ` They have <b>${open} open task(s)</b>.` : ''}`,
-        body: open ? field({ label: 'Give their open tasks to', name: 'to', type: 'select', options: [['', 'Nobody — leave them unassigned']].concat(ctx.D.team.filter(x => x.key !== p.key).map(x => [x.key, x.name])) }) + `<p class="small muted">Tip: their backup${p.backup ? ` (${esc(p.backup)})` : ''} is usually the right person.</p>` : '' });
-      if (!v) return;
-      const r = await ctx.api.post('person.deactivate', { key: p.key, reassignTo: (v && v.to) || '' });
-      if (!r.ok) return toast(r.error, 'err');
-      toast(`${p.name} removed${r.moved ? ` — ${r.moved} task(s) moved` : ''}.`); await ctx.refresh();
-    }
+    if (k === 'remove') return removeModal(ctx, p);
     if (k === 'react') { const r = await ctx.api.post('person.reactivate', { key: p.key }); if (!r.ok) return toast(r.error, 'err'); linkModal(ctx, p, r, 'Welcome back — send the new link'); ctx.refresh({ silent: true }); }
+  };
+}
+
+/** Remove someone: pick who takes each open task (or leave it unassigned — anyone can take it). Finished work keeps their name. */
+function removeModal(ctx, p) {
+  const open = (ctx.D.all || []).filter(t => t.owner === p.key && !['Done', 'Dropped'].includes(t.status)).sort((a, b) => a.due < b.due ? -1 : 1);
+  const others = ctx.D.team.filter(x => x.key !== p.key), hasUn = (ctx.D.features || []).includes('unassigned');
+  const backup = others.find(x => p.backup && (x.key === p.backup.toLowerCase() || x.name.toLowerCase().startsWith(p.backup.toLowerCase())));
+  const opts = v => (hasUn ? `<option value="-" ${v === '-' ? 'selected' : ''}>— Unassigned (anyone can take it) —</option>` : '') + others.map(x => `<option value="${esc(x.key)}" ${x.key === v ? 'selected' : ''}>${esc(x.name)}${backup && x.key === backup.key ? ' (their backup)' : ''}</option>`).join('');
+  const def = hasUn ? '-' : (backup ? backup.key : (others[0] || {}).key);
+  const m = modal({ title: `Remove ${p.name} from the team?`, size: open.length ? 'lg' : 'sm',
+    body: `<p>Their sign-in stops working and the bot forgets them. Finished tasks and history keep their name.</p>
+      ${open.length ? `<div class="row" style="gap:8px;align-items:center;margin:10px 0"><b>${open.length} open task(s).</b> <label class="small">Give all to <select id="rm-all"><option value="">…</option>${opts('')}</select></label></div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Task</th><th>Due</th><th>New owner</th></tr></thead><tbody>${open.map(t => `<tr><td><b>${esc(t.title)}</b><div class="t-sub">${esc(t.id)}${t.area ? ' · ' + esc(t.area) : ''}</div></td><td class="nowrap small">${esc(String(t.due).slice(0, 10))}</td><td><select data-task="${esc(t.id)}">${opts(def)}</select></td></tr>`).join('')}</tbody></table></div>
+      <p class="small muted">Everyone who gets a task is told (Telegram or email).${hasUn ? ' Unassigned tasks are posted in the organizer group.' : ''}</p>` : ''}`,
+    foot: `<button class="btn ghost" data-close>Cancel</button><button class="btn danger" id="rm-go">${icon('trash')} Remove ${esc(first(p.name))}</button>` });
+  const all = $('#rm-all', m.el);
+  if (all) all.onchange = () => { if (all.value) m.el.querySelectorAll('[data-task]').forEach(s => { s.value = all.value; }); };
+  $('#rm-go', m.el).onclick = async e => {
+    const reassign = {}; m.el.querySelectorAll('[data-task]').forEach(sel => { reassign[sel.dataset.task] = sel.value; });
+    busy(e.currentTarget, true, 'Removing…');
+    const r = await ctx.api.post('person.deactivate', { key: p.key, reassign, reassignTo: hasUn ? '' : def });
+    busy(e.currentTarget, false);
+    if (!r.ok) return toast(r.error, 'err');
+    m.close(); toast(`${p.name} removed${r.moved ? ` — ${r.moved} task(s) handed over` : ''}${r.unassigned ? `, ${r.unassigned} unassigned` : ''}.`); await ctx.refresh();
+  };
+}
+
+/** Add several organizers at once: one per line "Name, email or @telegram, area". Each gets their own link. */
+function addMany(ctx) {
+  const parse = text => String(text || '').split(/\n/).map(l => l.trim()).filter(Boolean).map(l => {
+    const parts = l.split(/[,;\t]/).map(x => x.trim()), o = { name: parts[0] || '', email: '', handle: '', area: '' };
+    parts.slice(1).forEach(x => { if (/^@\w{4,}$/.test(x)) o.handle = x; else if (/^[^\s@]+@[^\s@]+\.\w+$/.test(x)) o.email = x.toLowerCase(); else if (x && !o.area) o.area = x; });
+    return o;
+  });
+  const m = modal({ title: 'Add several organizers', size: 'lg', body: `<p class="muted">One person per line: <b>Name, email or @telegram, area</b> — only the name is required. Everyone gets their own personal link.</p>
+      <textarea id="am-t" rows="7" placeholder="Nora Kim, nora@example.com, Design\nTimur Aliev, @timur_a, Outreach\nSara Lee"></textarea>
+      <div class="row" style="margin:10px 0">${field({ label: 'Access', name: 'access', type: 'select', value: 'member', options: ACCESS.slice(0, 3) })}${field({ label: 'Email each one their link (if they have an email)', name: 'invite', type: 'toggle', value: true })}</div>
+      <div id="am-prev"></div>`,
+    foot: `<button class="btn ghost" data-close>Cancel</button><button class="btn primary" id="am-go" disabled>Add</button>` });
+  let rows = [];
+  $('#am-t', m.el).oninput = () => {
+    rows = parse($('#am-t', m.el).value);
+    $('#am-go', m.el).disabled = !rows.length; $('#am-go', m.el).textContent = rows.length ? `Add ${rows.length}` : 'Add';
+    $('#am-prev', m.el).innerHTML = rows.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Name</th><th>Email</th><th>Telegram</th><th>Area</th></tr></thead><tbody>${rows.map(r => `<tr><td>${r.name ? esc(r.name) : '<span class="errline">name missing</span>'}</td><td>${esc(r.email || '—')}</td><td>${esc(r.handle || '—')}</td><td>${esc(r.area || '—')}</td></tr>`).join('')}</tbody></table></div>` : '';
+  };
+  $('#am-go', m.el).onclick = async e => {
+    const btn = e.currentTarget, o = formValues(m.el), out = [];
+    if (rows.some(r => !r.name)) return toast('Every line needs a name.', 'err');
+    for (let i = 0; i < rows.length; i++) {
+      btn.disabled = true; btn.innerHTML = `<span class="spin"></span>Adding ${i + 1} of ${rows.length}…`;
+      const r = await ctx.api.post('person.add', { person: Object.assign({ access: o.access, notify: 'auto', invite: o.invite && !!rows[i].email }, rows[i]) });
+      out.push({ row: rows[i], r });
+    }
+    m.close(); await ctx.refresh({ silent: true });
+    const okd = out.filter(x => x.r.ok), bad = out.filter(x => !x.r.ok);
+    const all = okd.map(x => x.r.message).join('\n\n———\n\n');
+    const res = modal({ title: `Added ${okd.length} of ${out.length}`, size: 'lg', body: `${bad.length ? `<div class="banner bad">${icon('alert')}<div>${bad.map(x => `<b>${esc(x.row.name)}</b>: ${esc(x.r.error)}`).join('<br>')}</div></div>` : ''}
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Person</th><th>Invite</th><th></th></tr></thead><tbody>${okd.map((x, i) => `<tr><td><b>${esc(x.r.person.name)}</b></td><td class="small">${x.r.emailed ? `${icon('check')} emailed` : 'send it yourself'}</td><td class="nowrap"><button class="btn sm soft" data-cp="${i}">${icon('copy')} Copy message</button> <a class="btn sm ghost" target="_blank" rel="noopener" href="https://t.me/share/url?url=${encodeURIComponent(x.r.link)}&text=${encodeURIComponent(x.r.message.replace(x.r.link, '').trim())}">${icon('send')} Telegram</a></td></tr>`).join('')}</tbody></table></div>
+      <p class="small muted">Send each message privately — every link is that person's key.</p>`,
+      foot: `<button class="btn ghost" data-close>Close</button>${okd.length > 1 ? `<button class="btn primary" id="cp-all">${icon('copy')} Copy all messages</button>` : ''}` });
+    res.el.onclick = ev => { const c = ev.target.closest('[data-cp]'); if (c) copy(okd[Number(c.dataset.cp)].r.message, 'Message copied — paste it in a private chat.'); if (ev.target.closest('#cp-all')) copy(all, 'All messages copied.'); };
   };
 }
 

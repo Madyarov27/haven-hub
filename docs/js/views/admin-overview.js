@@ -15,6 +15,8 @@ export function overview(ctx) {
   let h = '';
   const newApps = (D.applications || []).filter(a => a.status === 'new').length;
   if (newApps) h += `<div class="banner info">${icon('inbox')}<div>${newApps} new ${newApps === 1 ? 'person wants' : 'people want'} to join the team. <a href="#/admin/applications">Review applications</a></div></div>`;
+  const nobody = open.filter(t => !t.owner);
+  if (nobody.length && ctx.isLead) h += `<div class="banner">${icon('inbox')}<div><b>${nobody.length} open task${nobody.length === 1 ? ' has' : 's have'} no owner</b>${nobody.some(t => dueInfo(t, tz).over) ? ' (some are overdue)' : ''}. Give them to someone, or let the team take them. <a href="#/admin/tasks?owner=-">See them</a></div></div>`;
   h += `<div class="kpis six">
     ${kpi('overdue', over.length, { tone: over.length ? 'bad' : 'ok', icon: 'alert' })}
     ${kpi('blocked', blocked.length, { tone: blocked.length ? 'bad' : 'ok', icon: 'zap' })}
