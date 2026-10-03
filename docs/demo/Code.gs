@@ -685,7 +685,9 @@ function resources_() {
   MEMO.res = rows_('Resources').filter(r => r.id && r.title && r.url).sort(by);
   return MEMO.res;
 }
-function resourceOut_(r) { return { id: r.id, title: r.title, url: r.url, kind: r.kind || kindOf_(r.url), section: r.section || '', private: r.private === 'yes', thumb: r.thumb || '', note: r.note || '' }; }
+function resourceOut_(r) { return { id: r.id, title: r.title, url: r.url, kind: r.kind || kindOf_(r.url), section: r.section || '', private: r.private === 'yes' || r.private === 'leads', leads: r.private === 'leads', thumb: r.thumb || '', note: r.note || '' }; }
+/** private: 'no' = everyone with access (guests too), 'yes' = the team (not guests), 'leads' = leads and admins only. */
+function seesRes_(lvl, r) { return r.private === 'leads' ? RANK[lvl] >= 2 : r.private === 'yes' ? lvl !== 'viewer' : true; }
 /** One line of a task's "what you need" → an item: a Files link id, or gh:<path in the team files repo> (a trailing / = a folder). */
 function refOut_(ref) {
   if (/^gh:/.test(ref)) {
@@ -713,7 +715,7 @@ function resourceFields_(x, r, errs) {
   if (!title) errs.push('Give the link a title.');
   if (!/^https:\/\/[^\s<>"']+$/i.test(url)) errs.push('The link must start with https:// (' + url.slice(0, 40) + ')');
   if (thumb && !/^https:\/\/[^\s<>"']+$/i.test(thumb)) errs.push('The picture link must start with https://');
-  Object.assign(r, { title: title, url: url, kind: kindOf_(url), section: clean_(x.section, 40), private: yn_(x.private), thumb: thumb, note: clean_(x.note, 300), order: String(parseInt(x.order, 10) || 0) });
+  Object.assign(r, { title: title, url: url, kind: kindOf_(url), section: clean_(x.section, 40), private: x.private === 'leads' || x.leads === true ? 'leads' : yn_(x.private), thumb: thumb, note: clean_(x.note, 300), order: String(parseInt(x.order, 10) || 0) });
 }
 /** Leads: add or change links on the Files page. One ({resource}) or many ({resources: [...]}, matched by id — so a list can be re-imported). */
 function saveResources_(me, b) {
@@ -747,7 +749,7 @@ function deleteResource_(me, b) {
 function filesOut_() { const S = S_(); return { repo: S.files_repo || '', branch: S.files_branch || 'main', server: SELF_HOSTED }; }
 function filesList_(me) {
   const viewer = access_(me) === 'viewer';
-  return { ok: true, files: filesOut_(), resources: resources_().filter(r => !viewer || r.private !== 'yes').map(resourceOut_) };
+  return { ok: true, files: filesOut_(), resources: resources_().filter(r => seesRes_(access_(me), r)).map(resourceOut_) };
 }
 
 /** Admin, once after moving files to a new place: task links that point into an old GitHub repo move to "what you need" or to a new address.
@@ -1538,8 +1540,9 @@ function apiMe_(me, q) {
     rules: rules_(), meetings: meetings_(), milestones: milestones_(),
     publicLink: publicLink_(),
     features: FEATURES,
-    files: filesOut_(), resources: resources_().filter(r => lvl !== 'viewer' || r.private !== 'yes').map(resourceOut_),
+    files: filesOut_(), resources: resources_().filter(r => seesRes_(lvl, r)).map(resourceOut_),
   };
+  if (!lead) out.tasks.concat(out.open).forEach(t => { t.resources = t.resources.filter(r => !r.leads); }); // links only leads may see stay out of members' tasks
   if (seeAll) {
     out.all = all.map(taskOut_);
     if (lvl === 'viewer') out.all.forEach(t => { t.proof = ''; t.blocked_reason = ''; t.ask = ''; t.resources = t.resources.filter(r => !r.private); });

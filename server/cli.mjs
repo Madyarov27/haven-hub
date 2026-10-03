@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 
 const [cmd, ...args] = process.argv.slice(2);
-if (!cmd) { console.log('Usage: hubctl <status|admin-links|reset-link KEY|set-setting KEY VALUE|import-code|setup-code|backup|export|set-webhook|remind|weekly-report>'); process.exit(1); }
+if (!cmd) { console.log('Usage: hubctl <status|admin-links|reset-link KEY|set-setting KEY VALUE|import-resources FILE|import-sponsors FILE|relink FILE [--apply]|files-sync|import-code|setup-code|backup|export|set-webhook|remind|weekly-report>'); process.exit(1); }
 const socketPath = join(process.env.HAVEN_HOME || join(homedir(), 'haven'), 'run', 'admin.sock');
 const req = request({ socketPath, path: '/', method: 'POST', headers: { 'Content-Type': 'application/json' } }, res => {
   let out = ''; res.on('data', c => { out += c; });

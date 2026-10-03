@@ -62,7 +62,7 @@ export function needItem(ctx, it) {
   } else { href = safeUrl(it.url); kind = it.kind || 'link'; label = (KIND[kind] || KIND.link)[0] + (kind === 'canva' || kind === 'figma' ? ' — open & edit' : ''); }
   if (!href) return '';
   const th = thumbOf(ctx, it);
-  return `<a class="need k-${esc(kind)}" href="${esc(href)}" ${ext ? 'target="_blank" rel="noopener"' : ''}><span class="need-ic">${th ? `<img src="${esc(th)}" alt="" loading="lazy">` : icon((KIND[kind] || KIND.file)[1])}</span><span class="need-t"><b>${esc(it.title)}</b><small>${esc(label)}${it.private ? ' · team only' : ''}</small></span></a>`;
+  return `<a class="need k-${esc(kind)}" href="${esc(href)}" ${ext ? 'target="_blank" rel="noopener"' : ''}><span class="need-ic">${th ? `<img src="${esc(th)}" alt="" loading="lazy">` : icon((KIND[kind] || KIND.file)[1])}</span><span class="need-t"><b>${esc(it.title)}</b><small>${esc(label)}${it.leads ? ' · leads only' : it.private ? ' · team only' : ''}</small></span></a>`;
 }
 export function needsStrip(ctx, items) {
   const html = (items || []).map(it => needItem(ctx, it)).join('');
@@ -129,7 +129,7 @@ function linkTile(ctx, r) {
   const k = KIND[r.kind] || KIND.link, url = safeUrl(r.url), th = r.thumb ? safeUrl(r.thumb) : '';
   return `<div class="ftile"><a class="fthumb k-${esc(r.kind)}" href="${esc(url)}" target="_blank" rel="noopener" aria-hidden="true" tabindex="-1">${th ? `<img src="${esc(th)}" alt="" loading="lazy">` : icon(k[1])}</a>
     <div class="fbody"><a class="ftitle" href="${esc(url)}" target="_blank" rel="noopener">${esc(r.title)}</a>
-      <div class="fmeta">${esc(k[0])}${r.private ? ' · <span title="Guests don\'t see it">team only</span>' : ''}</div>${r.note ? `<div class="fnote">${esc(r.note)}</div>` : ''}
+      <div class="fmeta">${esc(k[0])}${r.leads ? ' · <span title="Only leads and admins see it">leads only</span>' : r.private ? ' · <span title="Guests don\'t see it">team only</span>' : ''}</div>${r.note ? `<div class="fnote">${esc(r.note)}</div>` : ''}
       <div class="factions"><a class="btn sm soft" href="${esc(url)}" target="_blank" rel="noopener">${icon('external')} ${r.kind === 'canva' ? 'Open in Canva' : r.kind === 'figma' ? 'Open in Figma' : 'Open'}</a>
         <button class="icon-btn sm" data-copy="${esc(url)}" title="Copy the link" aria-label="Copy the link">${icon('copy')}</button>${ctx.isLead ? `<button class="icon-btn sm" data-edit="${esc(r.id)}" title="Edit" aria-label="Edit ${esc(r.title)}">${icon('edit')}</button>` : ''}</div></div></div>`;
 }
@@ -154,7 +154,7 @@ export function linkEditor(ctx, r, done) {
       ${field({ label: 'Link', name: 'url', type: 'url', value: r ? r.url : '', required: true, full: true, placeholder: 'https://www.canva.com/d/…', hint: 'Canva: Share → copy link. Google: Share → anyone with the link, or add the team.' })}
       <div class="field full"><label for="lf-sec">Section</label><input id="lf-sec" name="section" list="lf-secs" value="${esc(r ? r.section : '')}" placeholder="Posters & flyers"><datalist id="lf-secs">${secs.map(s => `<option value="${esc(s)}">`).join('')}</datalist><small class="hint">Same name as a folder in the team files repo = shown together.</small></div>
       ${field({ label: 'Note (optional)', name: 'note', value: r ? r.note : '', full: true, placeholder: 'Edit the date + QR, then export as PNG' })}
-      <div class="full">${field({ label: 'Team only', name: 'private', type: 'toggle', value: r ? r.private : false, hint: 'Guests (HQ, mentors, sponsors) don\'t see it. Use it for contact lists and edit links.' })}</div>
+      <div class="full">${field({ label: 'Who sees it', name: 'private', type: 'select', value: r ? (r.leads ? 'leads' : r.private ? 'yes' : 'no') : 'no', options: [['no', 'Everyone with access to the hub (guests too)'], ['yes', 'The team only — not guests (contact lists, edit links)'], ['leads', 'Leads and admins only (your own plans and notes)']] })}</div>
       <details class="full"><summary class="small"><b>Picture (optional)</b></summary>${field({ label: 'Picture link (https://…)', name: 'thumb', value: r ? r.thumb : '', full: true, hint: 'A small preview image, e.g. the poster as a PNG in the team files repo.' })}</details>
     </form>`,
     foot: `${r ? `<button class="btn danger ghost left" data-del>${icon('trash')} Delete</button>` : ''}<button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-save>${r ? 'Save' : 'Add link'}</button>` });

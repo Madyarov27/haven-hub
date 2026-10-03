@@ -378,6 +378,21 @@ export async function createHub(opts = {}) {
     async 'notify-admins'(text) { return run(() => { be.call('resetMemo_'); const to = be.call('activePeople_').filter(p => be.call('isAdmin_', p) && p.chat_id); to.forEach(p => be.call('tg_', p.chat_id, text)); return to.length; }); },
     async remind() { return call('eveningReminders'); },
     async 'weekly-report'() { return call('weeklyReport'); },
+    /** Sponsors from a JSON file: [{ name, link, tier, blurb, note, public, logo: 'logo.png' (next to the file) }]. Same name = updated, so it can be run again. */
+    async 'import-sponsors'(file) {
+      const list = JSON.parse(readFileSync(String(file), 'utf8')), dir = dirname(resolve(String(file))), MIMES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' };
+      return run(() => {
+        be.call('resetMemo_');
+        return list.map(x => {
+          const cur = be.call('sponsors_', true).find(s => s.name.toLowerCase() === String(x.name || '').toLowerCase());
+          const b = { sponsor: Object.assign({}, x, { id: cur ? cur.id : undefined, logo: undefined }) };
+          if (x.logo) { const p = resolve(dir, String(x.logo)), mime = MIMES[extname(p).toLowerCase()]; if (!mime) throw new Error('Logo must be PNG, JPG or WebP: ' + x.logo); b.logo = { mime, data: readFileSync(p).toString('base64') }; }
+          const r = be.call('saveSponsor_', { name: 'server admin', key: '' }, b);
+          if (!r.ok) throw new Error(x.name + ': ' + r.error);
+          return { name: r.sponsor.name, public: r.sponsor.public, logo: r.sponsor.logo };
+        });
+      });
+    },
   };
 
   // ------------------------------------------------------------------ HTTP

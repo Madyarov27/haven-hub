@@ -1,7 +1,7 @@
 // v4.5: sponsors with uploaded logos, profile photos, profiles, "already on the team" applications, Google sign-in, password reset links.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync } from 'node:fs';
+import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
@@ -260,5 +260,35 @@ test('public logos (own server): uploaded sponsor logos are served at /files/pub
   assert.equal((await fetch(s.base + '/files/pub/..%2Fhub.db')).status, 404);
   const pub = await s.get({ action: 'public' });
   assert.equal(pub.sponsors[0].logo, a.sponsor.logo);
+  await s.stop();
+});
+
+test('files: links for leads only — members and guests never see them, not even in their tasks', () => {
+  const h = setupHub();
+  const bob = h.add({ name: 'Bob Builder' }), cy = h.add({ name: 'Cy Lead', access: 'lead' }), vi = h.add({ name: 'Vi Guest', access: 'viewer' });
+  const r = h.as(h.admin, { action: 'resource.save', resources: [
+    { id: 'plan', title: 'Week plan', url: 'https://github.com/x/private/blob/main/plan.docx', section: 'Lead desk', private: 'leads' },
+    { id: 'list', title: 'Contacts', url: 'https://docs.google.com/spreadsheets/d/abc/edit', section: 'Trackers', private: true },
+    { id: 'logo', title: 'Logo', url: 'https://example.com/logo.png', section: 'Brand kit' }] });
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.resources.find(x => x.id === 'plan').leads, true);
+  h.as(h.admin, { action: 'task.add', task: { title: 'Posters', owner: bob.u, due: '2026-10-20', resources: ['plan', 'list', 'logo'] } });
+  const ids = who => h.get(who, { action: 'me' }).resources.map(x => x.id).sort().join(',');
+  assert.equal(ids(h.admin), 'list,logo,plan'); assert.equal(ids(cy), 'list,logo,plan');
+  assert.equal(ids(bob), 'list,logo', 'members: no leads-only links'); assert.equal(ids(vi), 'logo', 'guests: public links only');
+  assert.deepEqual(h.get(bob, { action: 'me' }).tasks[0].resources.map(x => x.ref), ['list', 'logo'], 'not in their own task either');
+  assert.equal(h.get(bob, { action: 'files.list' }).resources.length, 2);
+});
+
+test('hubctl import-sponsors: a JSON list with logo files next to it; running it again updates instead of adding', async () => {
+  const s = await boot(), dir = mkdtempSync(join(tmpdir(), 'sp-'));
+  writeFileSync(join(dir, 'pcb.png'), Buffer.from(PNG, 'base64'));
+  writeFileSync(join(dir, 'sponsors.json'), JSON.stringify([{ name: 'PCB Co', tier: 'In-kind', blurb: 'Badges', logo: 'pcb.png', link: 'https://pcb.example' }, { name: 'Friends Club', tier: 'Partner', public: false }]));
+  const a = await s.hub.admin['import-sponsors'](join(dir, 'sponsors.json'));
+  assert.equal(a.length, 2); assert.match(a[0].logo, /\/files\/pub\//); assert.equal(a[1].public, false);
+  writeFileSync(join(dir, 'sponsors.json'), JSON.stringify([{ name: 'pcb co', blurb: 'Badges for everyone who ships' }]));
+  await s.hub.admin['import-sponsors'](join(dir, 'sponsors.json'));
+  const me = await s.get(Object.assign({ action: 'me' }, s.admin));
+  assert.equal(me.sponsors.length, 2); assert.equal(me.sponsors[0].blurb, 'Badges for everyone who ships'); assert.match(me.sponsors[0].logo, /\/files\/pub\//, 'the logo stays');
   await s.stop();
 });
