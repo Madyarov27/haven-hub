@@ -31,6 +31,7 @@ export function openStore(file) {
     getMeta: (k, d = null) => { const r = q('SELECT v FROM meta WHERE k = ?').get(k); return r ? r.v : d; },
     setMeta: (k, v) => q('INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v').run(k, String(v)),
     delMeta: k => q('DELETE FROM meta WHERE k = ?').run(k),
+    metaPrefix: prefix => q('SELECT k, v FROM meta WHERE substr(k, 1, ?) = ?').all(prefix.length, prefix),
     // sheets
     loadSheets: () => q('SELECT name, data FROM sheets ORDER BY pos').all().map(r => ({ name: r.name, data: JSON.parse(r.data) })),
     saveSheet: (name, pos, data) => q('INSERT INTO sheets (name, pos, data) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET pos = excluded.pos, data = excluded.data').run(name, pos, JSON.stringify(data)),

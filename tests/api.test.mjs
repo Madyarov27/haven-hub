@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createGas, loadBackend } from '../dev/gas-fakes.js';
+import { createGas, loadBackend } from '../docs/demo/gas-fakes.js';
 
 const CODE = readFileSync(new URL('../apps-script/Code.gs', import.meta.url), 'utf8');
 const HUB = 'AKfycbTESTdeployment0000000000000000000000000000';
@@ -284,7 +284,7 @@ test('reminders + weekly report go to the right channel', () => {
 });
 
 test('v3 sheet upgrades in place: tokens kept, is_lead → admin, v3 fields still there', () => {
-  const gas = createGas();
+  const gas = createGas({ tz: 'Asia/Tashkent' });
   const ss = gas._ss;
   const people = ss.insertSheet('People');
   people.getRange(1, 1, 1, 14).setValues([['key', 'name', 'role', 'area', 'handle', 'token', 'is_lead', 'chat_id', 'active', 'backup', 'works', 'weekend', 'one', 'ask']]);

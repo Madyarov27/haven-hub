@@ -3,7 +3,8 @@ import { $, esc, icon, toast, busy, field, formValues, copy, store, zones, brows
 import { hubFrom, getFrom, postTo, DEMO, DEMO_HUB, SELF, demoSheetUrl, siteUrl } from '../api.js';
 
 const STEPS = ['Copy', 'Deploy', 'Prove', 'Event', 'Create'];
-const RAW = 'https://raw.githubusercontent.com/notazizelse/haven-hub/main/apps-script/Code.gs';
+/** Code.gs of the repo this website comes from (a fork pastes its own). */
+const RAW = String((window.HUB_CONFIG && window.HUB_CONFIG.repo) || (window.HUB_RELEASE && window.HUB_RELEASE.repo) || 'https://github.com/notazizelse/haven-hub').replace('https://github.com/', 'https://raw.githubusercontent.com/') + '/main/apps-script/Code.gs';
 let st = null;
 
 export function setup(root, ctx) {
@@ -64,7 +65,7 @@ export function setup(root, ctx) {
   const cc = $('#copycode');
   if (cc) cc.onclick = async e => { const btn = e.currentTarget;
     busy(btn, true, 'Fetching…');
-    try { const code = await (await fetch(DEMO ? '../apps-script/Code.gs' : RAW, { cache: 'no-store' })).text(); await copy(code, 'Code copied — paste it into Apps Script.'); }
+    try { const code = await (await fetch(DEMO ? 'demo/Code.gs' : RAW, { cache: 'no-store' })).text(); await copy(code, 'Code copied — paste it into Apps Script.'); }
     catch (err) { toast('Could not fetch it — open the file and copy it by hand.', 'err'); }
     busy(btn, false);
   };

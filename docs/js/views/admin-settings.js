@@ -1,5 +1,20 @@
-/* Settings (admins): event, public page, reminders, Telegram bot, hub & data. */
+/* Settings (admins): event, public page, reminders, Telegram bot, Google sign-in, hub & data. */
 import { $, esc, icon, toast, busy, field, formValues, copy, download, zones } from '../ui.js';
+import { redirectUri } from '../google.js';
+
+/** "Sign in with Google": what to register in Google Cloud, and where the client id goes (Settings on a Sheet hub, .env on a server). */
+function googleCard(ctx, D, S) {
+  const on = !!D.google, server = D.hosting === 'server', origin = location.origin, uri = redirectUri();
+  const steps = `<ol class="how small"><li>Open <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Google Cloud → Credentials</a> (any Google account; make a project if asked).</li>
+    <li><b>OAuth consent screen</b>: External, app name “${esc(S.event_name || 'Haven')} Team Hub”, scopes <code>openid</code> <code>email</code> <code>profile</code>, then <b>Publish app</b> (In production — no review is needed for these scopes).</li>
+    <li><b>Create credentials → OAuth client ID → Web application</b>. Authorized JavaScript origins: <code>${esc(origin)}</code> <button class="linkbtn" type="button" data-copy="${esc(origin)}">copy</button><br>Authorized redirect URIs: <code>${esc(uri)}</code> <button class="linkbtn" type="button" data-copy="${esc(uri)}">copy</button></li>
+    <li>Copy the <b>Client ID</b> (…apps.googleusercontent.com) ${server ? 'and on the server run <code>hubctl set-secret GOOGLE_CLIENT_ID</code>, paste it — the hub restarts with Google sign-in on.' : 'and paste it below.'}</li></ol>`;
+  const head = `<div class="card-h"><div><h3>Sign in with Google <span class="muted small">(optional)</span></h3><div class="sub">People sign in with their Google account; new people can “Sign up with Google” on the join form. Google only tells the hub their name, email and picture.</div></div>${on ? `<span class="pill ok">${icon('check')} on</span>` : '<span class="pill">off</span>'}</div>`;
+  if (server) return `<div class="card">${head}${on ? `<p class="small" style="margin:0 0 8px">Client: <code>${esc(D.google)}</code></p><details class="small"><summary>Addresses registered with Google</summary>${steps}</details>` : steps}</div>`;
+  return `<form class="card" id="s-google">${head}${on && !S.google_client_id ? '<p class="small muted">Using the shared website\'s Google client.</p>' : ''}<details class="small" ${on ? '' : 'open'}><summary>How to get a client ID (5 minutes)</summary>${steps}</details>
+    ${field({ label: 'Google client ID', name: 'google_client_id', value: S.google_client_id || '', placeholder: '1234…apps.googleusercontent.com', hint: 'Empty = the shared website\'s client (when it has one).' })}
+    <div class="row"><button class="btn primary" type="submit">Save</button></div></form>`;
+}
 
 export function settings(ctx) {
   const D = ctx.D, S = D.settings || {}, CFG = ctx.cfg, pub = ctx.api.publicUrl();
@@ -46,6 +61,7 @@ export function settings(ctx) {
       ${field({ label: 'GitHub repo (owner/repo)', name: 'files_repo', value: S.files_repo, placeholder: 'yourname/haven-yourcity-team', hint: 'Public repos only — never put phone numbers, contact lists or Canva edit links in it.' })}
       ${field({ label: 'Branch', name: 'files_branch', value: S.files_branch || 'main' })}`,
       S.files_repo ? `<a class="btn ghost" href="https://github.com/${esc(S.files_repo)}" target="_blank" rel="noopener">${icon('external')} Open on GitHub</a>` : '') : ''}
+    ${googleCard(ctx, D, S)}
     ${form('s-hub', 'Hub & data', 'Advanced — you rarely need to change these.', `
       ${field({ label: 'Website address', name: 'site_url', type: 'url', value: S.site_url, hint: 'Change it only if you run your own copy of the website.' })}
       ${field({ label: 'Hub ID (web-app deployment)', name: 'hub_id', value: S.hub_id, hint: 'Part of every personal link. Filled in automatically.' })}`,
@@ -66,8 +82,10 @@ export function settings(ctx) {
     if (id === 's-files') { D.files = Object.assign({}, D.files, { repo: r.settings.files_repo, branch: r.settings.files_branch || 'main' }); ctx.api.cache(D); }
     toast(r.warning || 'Saved.', r.warning ? 'err' : 'ok');
     if (id === 's-event') ctx.render();
+    if (id === 's-google') ctx.refresh();
   };
-  ['s-event', 's-rem', 's-pub', 's-hub', 's-files'].forEach(id => { const f = $('#' + id); if (f) f.onsubmit = e => save(e, id); });
+  ['s-event', 's-rem', 's-pub', 's-hub', 's-files', 's-google'].forEach(id => { const f = $('#' + id); if (f) f.onsubmit = e => save(e, id); });
+  ctx.el.querySelectorAll('[data-copy]').forEach(b => { b.onclick = () => copy(b.dataset.copy, 'Copied.'); });
   $('#cpub').onclick = () => copy(pub, 'Public link copied.');
   $('#exp').onclick = async e => { const btn = e.currentTarget;
     busy(btn, true, 'Exporting…'); const r = await ctx.api.get('export'); busy(btn, false);

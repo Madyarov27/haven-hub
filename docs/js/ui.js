@@ -67,7 +67,16 @@ const I = {
   table: '<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/>',
   pen: '<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>',
   type: '<polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/>',
+  camera: '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>',
+  gift: '<polyline points="20 12 20 22 4 22 4 12"/><rect x="2" y="7" width="20" height="5"/><line x1="12" y1="22" x2="12" y2="7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  arrow: '<line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>',
+  move: '<polyline points="5 9 2 12 5 15"/><polyline points="9 5 12 2 15 5"/><polyline points="15 19 12 22 9 19"/><polyline points="19 9 22 12 19 15"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/>',
+  phone: '<rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>',
+  server: '<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>',
 };
+/** Google's "G" for the Sign in with Google buttons (colours from Google's sign-in branding guidelines). */
+export const googleG = '<svg class="gg" viewBox="0 0 48 48" aria-hidden="true" focusable="false"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>';
 export const icon = (name, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${I[name] || ''}</svg>`;
 
 // ------------------------------------------------------------------ toasts
@@ -176,9 +185,39 @@ export function busy(btn, on, label) {
 // ------------------------------------------------------------------ small components
 const AV = ['#E87136', '#783D2B', '#A8A237', '#C4541B', '#8A6A1F', '#2F7D8C', '#B8C11F', '#DFA063'];
 export const initials = n => String(n || '?').split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase();
-export function avatar(name, size) {
+/** Pictures that may go in an <img src>: our own files, https, or a small inline JPG/PNG/WebP. */
+export const safeImg = u => { u = String(u || '').trim(); return /^(https:\/\/[^\s"'<>]+|data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+|(assets|demo)\/[\w./-]+)$/.test(u) ? u : ''; };
+/** Profile photos by person name and key — filled from the team list after every load, so every avatar() shows the photo. */
+const PHOTOS = new Map();
+export function setPhotos(list) { PHOTOS.clear(); (list || []).forEach(p => { const u = safeImg(p.photo); if (u) { PHOTOS.set(p.name, u); PHOTOS.set('@' + p.key, u); } }); }
+export const photoOf = (name, key) => PHOTOS.get('@' + key) || PHOTOS.get(name) || '';
+export function avatar(name, size, photo) {
+  const src = safeImg(photo) || PHOTOS.get(name);
+  if (src) return `<img class="av ph ${size || ''}" src="${esc(src)}" alt="" loading="lazy" referrerpolicy="no-referrer">`;
   let h = 0; for (const ch of String(name)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   return `<span class="av ${size || ''}" style="background:${AV[h % AV.length]}" aria-hidden="true">${esc(initials(name))}</span>`;
+}
+/** A picture file → a small data URL, made in the browser (the original never leaves the device).
+ *  square: centre-crop (profile photos). type: 'image/jpeg' (photos) or 'png' (logos keep their transparency; WebP when the browser can). */
+export function imageData(file, { max = 512, square = false, type = 'image/jpeg', quality = 0.84 } = {}) {
+  return new Promise((res, rej) => {
+    if (!file || !/^image\//.test(file.type || '')) return rej(new Error('Pick a picture (JPG, PNG, WebP or SVG).'));
+    const img = new Image(), u = URL.createObjectURL(file);
+    img.onload = () => {
+      let sw = img.naturalWidth || img.width || max, sh = img.naturalHeight || img.height || max, sx = 0, sy = 0;
+      if (square) { const s = Math.min(sw, sh); sx = (sw - s) / 2; sy = (sh - s) / 2; sw = sh = s; }
+      const k = Math.min(1, max / Math.max(sw, sh)), c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(sw * k)); c.height = Math.max(1, Math.round(sh * k));
+      const g = c.getContext('2d');
+      if (type === 'image/jpeg') { g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); }
+      g.drawImage(img, sx, sy, sw, sh, 0, 0, c.width, c.height); URL.revokeObjectURL(u);
+      let out = type === 'png' ? c.toDataURL('image/webp', 0.9) : c.toDataURL(type, quality);
+      if (type === 'png' && !/^data:image\/webp/.test(out)) out = c.toDataURL('image/png');
+      res(out);
+    };
+    img.onerror = () => { URL.revokeObjectURL(u); rej(new Error('Could not read this picture. Try a JPG or PNG.')); };
+    img.src = u;
+  });
 }
 const PILL = { 'Not started': 'ns', 'In progress': 'ip', Blocked: 'bl', Done: 'dn', Dropped: 'dr' };
 export const pill = s => `<span class="pill ${PILL[s] || 'ns'}">${esc(s || 'Not started')}</span>`;

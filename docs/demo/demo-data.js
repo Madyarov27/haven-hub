@@ -84,9 +84,19 @@ export function seed(be, gas, hub) {
     { date: day(43).slice(0, 10), time: '20:00', where: 'Telegram voice (20 min)', what: 'Everyone confirms role + arrival time' }] }), 'meetings');
   const me = be.get(Object.assign({ action: 'me' }, admin));
   ok(as(admin, { action: 'list.save', tab: 'Milestones', rows: me.milestones.map((m, i) => Object.assign({}, m, { public: m.public || i === 0, done: i === 0 })).concat([{ date: day(-10).slice(0, 10), label: 'Signups open', kind: 'event', public: true, done: true }]) }), 'milestones');
-  ok(as(admin, { action: 'settings.save', values: { instagram: 'https://instagram.com/haven.springfield.hackclub', city_email: 'springfield@haven.hackclub.com' } }), 'settings');
+  ok(as(admin, { action: 'settings.save', values: { instagram: 'https://instagram.com/haven.springfield.hackclub', city_email: 'springfield@haven.hackclub.com', google_client_id: 'demo-only.apps.googleusercontent.com' } }), 'settings'); // shows the Google buttons (the demo never calls Google)
   be.post({ action: 'apply', name: 'Nora Kim', contact: '@nora_draws', age_group: '13-18', interest: 'Design & posters', note: 'I draw pixel art and can make stickers.' });
   be.post({ action: 'apply', name: 'Mr. Alvarez', contact: 'alvarez@example.com', age_group: '19+', interest: 'Mentoring (19+)', note: 'CS teacher, happy to mentor on Saturday.' });
+  be.post({ action: 'apply', name: 'Priya', contact: 'priya@example.com', age_group: '13-18', interest: 'Design & posters', note: 'I also want to help with the posters!' }); // already on the team
+  // sponsors (made-up) — drawn logos, shown on the public page
+  [['Maple Street Pizza', 'Food', 'Sunday lunch for everyone', logo('MAPLE ST', 'pizza · since 1998', '#C4541B', '#fff'), 'https://example.com/pizza'],
+    ['Pixelworks Print', 'In-kind', 'All posters and badges', logo('PIXELWORKS', 'print shop', '#2F7D8C', '#fff'), 'https://example.com/print'],
+    ['Lighthouse Library', 'Venue', 'Two days in the big hall', logo('LIGHTHOUSE', 'public library', '#F9DD60', '#5C2C1F'), ''],
+    ['Retro Arcade Club', 'Prize sponsor', 'Prizes for the three best games', logo('RETRO ARCADE', 'club', '#2B1D17', '#FC8616'), 'https://example.com/arcade']]
+    .forEach(([name, tier, blurb, url, link]) => ok(as(admin, { action: 'sponsor.save', sponsor: { name, tier, blurb, link, logo_url: url, note: 'Made-up sponsor for the demo' } }), 'sponsor ' + name));
+  // profile photos (pixel sprites, not real faces)
+  [[admin, sprite(7, '#783D2B', '#FC8616')], [P.omar, sprite(19, '#2F7D8C', '#F9DD60')], [P.lina, sprite(42, '#A8A237', '#FFF7EE')], [P.priya, sprite(3, '#E87136', '#2B1D17')], [P.sam, sprite(77, '#5C2C1F', '#B8C11F')]]
+    .forEach(([who, photo]) => { if (photo) ok(as(who, { action: 'photo.save', photo }), 'photo'); });
   return { admin, lead: P.omar, member: P.lina, viewer: P.rivera, theo: P.theo };
 }
 
@@ -99,6 +109,28 @@ export const TREE = [
 const ASSET = { 'logo-orange.png': 'assets/logo-orange.png', 'logo-white.png': 'assets/logo-white.png', 'daven.png': 'assets/daven.png', 'daven-sketch.png': 'assets/daven-sketch.png', 'poster-feed-1080x1350.png': 'assets/hero.jpg', 'hello-card.jpg': 'assets/hero.jpg' };
 /** Demo only: where a picture of the made-up repo really is. */
 export const rawFor = path => ASSET[String(path).split('/').pop()] || '';
+
+/** Made-up sponsor logos for the demo: a coloured badge with the name (browser only; '' in Node). */
+function logo(text, sub, bg, fg) {
+  try {
+    const c = document.createElement('canvas'); c.width = 360; c.height = 140; const g = c.getContext('2d');
+    g.fillStyle = bg; g.beginPath(); g.roundRect(4, 4, 352, 132, 26); g.fill();
+    g.fillStyle = fg; g.textAlign = 'center'; g.font = '900 38px Nunito, sans-serif'; g.fillText(text, 180, 72);
+    g.font = '800 17px Nunito, sans-serif'; g.globalAlpha = .8; g.fillText(sub, 180, 104);
+    return c.toDataURL('image/png');
+  } catch (e) { return ''; }
+}
+/** Made-up profile pictures: a symmetric pixel-art sprite (no faces of real people). */
+function sprite(seed, bg, fg) {
+  try {
+    const c = document.createElement('canvas'); c.width = 96; c.height = 96; const g = c.getContext('2d'), n = 8, s = 96 / n;
+    let x = seed; const rnd = () => { x = (x * 9301 + 49297) % 233280; return x / 233280; };
+    g.fillStyle = bg; g.fillRect(0, 0, 96, 96); g.fillStyle = fg;
+    for (let r = 1; r < n - 1; r++) for (let q = 1; q < n / 2; q++) if (rnd() > 0.45) { g.fillRect(q * s, r * s, s, s); g.fillRect((n - 1 - q) * s, r * s, s, s); }
+    g.fillStyle = '#fff'; g.fillRect(2.5 * s, 3 * s, s, s); g.fillRect(4.5 * s, 3 * s, s, s); // eyes
+    return c.toDataURL('image/jpeg', 0.85);
+  } catch (e) { return ''; }
+}
 
 /** A little "poster on a wall" picture for the demo proof (browser only). */
 function poster() {

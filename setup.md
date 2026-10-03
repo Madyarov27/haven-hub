@@ -9,10 +9,13 @@ Haven Hub gives your organizing team:
 - **Reminders.** People get one the evening before each deadline, by email and/or a Telegram bot. Leads get instant BLOCKED alerts and a weekly report.
 - **A public page for your event.** It shows a countdown, your signup link, your organizing progress and a **Join the team** form.
 - **Guest links.** HQ, a mentor or a sponsor can get a read-only view of your progress.
+- **A team page with a page per person** — photos, roles, their work and their latest activity.
+- **A sponsors gallery.** Drop a logo and it shows on your public page; one click copies the sponsors block for your city page on haven.hackclub.com.
+- **Sign-in your way.** Personal links to start; then “Sign in with Google” or a password, and a one-time reset link when someone forgets.
 
 Everything is stored in **a Google Sheet that you own**. The website is shared by every Haven, but it only shows your data to people who have one of your links.
 
-> **Try it first:** the setup wizard is at **https://notazizelse.github.io/haven-hub/#/setup**. It shows every step below with buttons.
+> **Try it first:** take the **[2-minute guided tour](https://notazizelse.github.io/haven-hub/?demo=1&tour=1)** — the real app on a made-up team, nothing is saved. The setup wizard is at **https://notazizelse.github.io/haven-hub/#/setup**; it shows every step below with buttons. How the parts fit together: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ---
 
@@ -111,6 +114,29 @@ Go to **Settings → Public page** and copy your public link: `https://notazizel
 
 Join-form answers appear in **Dashboard → Applications**. Accepting someone opens *Add organizer* already filled in. If someone is 19+, the hub reminds you of HQ's age rule: they can't organize or take part, but they can mentor or volunteer.
 
+If the person is **already on the team** (same email, Telegram username or name), the application says so: close it as theirs, give them a task in that area, or open their page — nobody gets a second account. A first name alone is only flagged as a *maybe*.
+
+## Step 7 — Sponsors (optional)
+
+**Dashboard → Sponsors → drop a logo** (PNG, JPG, WebP or SVG). The website shrinks it, you name the sponsor, pick the kind (*Prize sponsor*, *In-kind*, *Venue*, *Partner*…) and an optional one-line “what they give”. Public sponsors appear as **Supported by** on your public page; switch *Show on the public page* off while you wait for their OK to name them.
+
+- Uploaded logos are the only public pictures in the hub: a Google Sheet hub keeps them in a Drive folder shared *anyone with the link* (*"… — public pictures (sponsor logos)"*); your own server serves them at `/files/pub/…`. If your Google account doesn't allow public files (some school accounts), small logos are kept in the Sheet instead.
+- **Copy for haven.hackclub.com** gives you the `sponsors` part of your city page document ([SITE_DATA.md](https://github.com/hackclub/haven/blob/main/SITE_DATA.md)) with the same logos and links.
+- Only add sponsors who confirmed **in writing**.
+
+## Step 8 — Sign in with Google (optional, 5 minutes)
+
+People can then sign in with their Google account, and new people can **Sign up with Google** on the join form (their name and email come filled in and verified). It works without any Google script on the page: the browser goes to accounts.google.com and comes back with a signed token that the hub checks with Google.
+
+1. Open **[Google Cloud → APIs & Services → Credentials](https://console.cloud.google.com/apis/credentials)** (any Google account; create a project when asked).
+2. **OAuth consent screen:** *External*, app name e.g. *Haven Springfield Team Hub*, scopes `openid`, `email`, `profile`. Then **Publish app** (*In production*). These basic scopes need no Google review.
+3. **Create credentials → OAuth client ID → Web application.** Add the two addresses that **Dashboard → Settings → Sign in with Google** shows you (with copy buttons):
+   - *Authorized JavaScript origins:* your website's origin, e.g. `https://notazizelse.github.io`
+   - *Authorized redirect URIs:* the website address, e.g. `https://notazizelse.github.io/haven-hub/`
+4. Copy the **Client ID** (`…apps.googleusercontent.com`) into **Settings → Sign in with Google**. On your own server instead run `~/haven/hubctl set-secret GOOGLE_CLIENT_ID` and paste it.
+
+**Who can sign in with Google:** someone who connected Google in **Profile → Sign in with Google**, or whose Gmail address you saved in **People** (Google must say the address is verified). Anyone else is told they are not on the team yet and can apply with one click. On your own server, a person's personal link stops working once they connect Google — like after making a password.
+
 ---
 
 ## Daily use
@@ -126,7 +152,10 @@ Join-form answers appear in **Dashboard → Applications**. Accepting someone op
 | Add meetings, team rules, milestones | **Meetings & rules** |
 | Someone leaves | **People → ⋯ → Remove from the team.** Hand their open tasks to their backup in the same step |
 | A link was shared by mistake | **People → ⋯ → Reset link.** The old link stops working immediately |
-| Someone forgot their password (own server) | **People → ⋯ → Reset sign-in.** Their password is removed and you get a new link to send; with it they make a new password |
+| Someone forgot their password (own server) | **People → ⋯ → Send a password reset link.** Send it on Telegram, by email, or copy it. It works once, for 24 hours; their username and Telegram stay. (**Reset sign-in** starts over completely with a new link) |
+| See everything about someone | **Team → click them** (or People → click the row): their job, contacts, open and finished tasks with proof, hours and latest activity. Admins edit, reset and remove from there |
+| Add a sponsor | **Sponsors → drop the logo** → name it → Save. **Copy for haven.hackclub.com** for HQ's city page |
+| Add my photo | **Profile → Add your photo** (or the camera on your page). Admins can set anyone's from their page |
 | Someone lost their link | They use **Organizer sign-in → Email me my link**, or you use **People → ⋯ → Get link** |
 | Get the volunteer-hours list for HQ | **People → Volunteer hours (CSV)** |
 | Back up everything | **Settings → Export all data**, or just open the Sheet |
@@ -220,7 +249,9 @@ No domain yet? `QUICK_TUNNEL=1` gives a temporary `https://….trycloudflare.com
 | `hubctl backup` | Take a backup now |
 | `hubctl set-webhook` | Point the Telegram bot at the server again |
 
-**Username + password sign-in (own server only).** Organizers open their personal link once, then **Profile → Make your password**. From then on they sign in at the hub with their username (or email) and password — the browser can save it — and **their personal links stop working**; messages link to the sign-in page instead. Passwords are stored only as scrypt hashes in the server's database (never in the tabs or exports); 5 wrong tries lock an account for 15 minutes. Forgot it? An admin uses **People → ⋯ → Reset sign-in**.
+**Username + password sign-in (own server only).** Organizers open their personal link once, then **Profile → Make your password**. From then on they sign in at the hub with their username (or email) and password — the browser can save it — and **their personal links stop working**; messages link to the sign-in page instead. Passwords are stored only as scrypt hashes in the server's database (never in the tabs or exports); 5 wrong tries lock an account for 15 minutes. Forgot it? An admin uses **People → ⋯ → Send a password reset link** (one-time, 24 hours; the server keeps only its hash).
+
+**Sign in with Google on your own server:** set `GOOGLE_CLIENT_ID` (`hubctl set-secret GOOGLE_CLIENT_ID`) — see **Step 8**. The server checks Google's signature itself against Google's published keys; no Google library is needed.
 
 **Backups:**
 - **Nightly:** `~/haven/backups/hub-YYYY-MM-DD.db` (the last 14 are kept), plus the proof files.
@@ -239,6 +270,9 @@ Most people on a Haven team are 13–18, so the hub is built to collect as littl
 - **Guest viewers** never see proof photos, contact details or notes.
 - **Email and Telegram messages only go to people in your People tab.** The join form never emails the person who filled it in, so nobody can use your hub to send spam.
 - **Proof photos** are stored in a private folder in your Google Drive (*"… — Team Hub proof files"*). Only leads, and the person who uploaded a photo, can open it through the hub.
+- **Profile photos** are small pictures kept in the People tab. The team sees them; they never appear on the public page.
+- **Sponsor logos** are the only public pictures (see Step 7).
+- **Google sign-in** only tells the hub a person's Google id, name, email and picture. The hub never sees a Google password and asks for no other access.
 - **HQ age rule:** anyone 19 or older at the event can't organize or take part — only mentor or volunteer.
 
 ---
@@ -277,18 +311,21 @@ Still stuck? Open an issue on [GitHub](https://github.com/notazizelse/haven-hub/
 python dev/serve.py
 ```
 
-Then open `http://localhost:5178/docs/?demo=1`. The demo runs the **real `Code.gs`** in your browser against in-memory fakes (`dev/gas-fakes.js`), filled with made-up data (`dev/demo-data.js`).
+Then open `http://localhost:5178/docs/?demo=1`. The demo runs the **real `Code.gs`** in your browser against in-memory fakes (`docs/demo/gas-fakes.js`), filled with made-up data (`docs/demo/demo-data.js`). It runs on GitHub Pages too — that is the guided tour (`?demo=1&tour=1`) — from `docs/demo/Code.gs`, a copy kept in step by `npm run sync` (a test fails while they differ).
 
 - To see another role, add `&as=admin`, `lead`, `member`, `viewer` or `guest` to the URL.
 - `?demo=fresh#/setup` walks the setup wizard.
+- `node dev/screenshots.mjs` (with the dev server running) redraws the screenshots on the showcase page from the demo, using your installed Chrome or Edge.
 
-**Tests** (the real `Code.gs`, run in Node 18+):
+**Tests** (the real `Code.gs`, run in Node 22.13+; GitHub Actions runs them on every push and pull request):
 
 ```bash
 node --test tests/*.test.mjs
 ```
 
 **Releasing a backend change:**
-1. Bump `HUB_VERSION` in `Code.gs` and `latestBackend` in `docs/config.js`.
-2. Bump the `?v=` in `docs/index.html`.
-3. Keep old API names working (the `ACTIONS` table has aliases), because hubs update at different times.
+1. Bump `HUB_VERSION` in `Code.gs`, `latestBackend` in `docs/config.js`, `version` in `docs/release.js` and `package.json`.
+2. Bump the `?v=` in `docs/index.html`, run `npm run sync`, and add a `CHANGELOG.md` entry.
+3. Keep old API names working (the `ACTIONS` table has aliases), and show new pages only when the backend lists the feature (`FEATURES` in Code.gs), because hubs update at different times.
+
+**The shared Google sign-in client** (optional): to let Sheet hubs on the shared website use Google without their own client, the maintainer creates one OAuth client with origin `https://notazizelse.github.io` and redirect URI `https://notazizelse.github.io/haven-hub/`, and puts its id in `SHARED_GOOGLE_CLIENT_ID` in Code.gs.

@@ -10,7 +10,7 @@ import { createLibrary } from '../server/library.mjs';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { writeFileSync, mkdirSync } from 'node:fs';
-import { createGas, loadBackend } from '../dev/gas-fakes.js';
+import { createGas, loadBackend } from '../docs/demo/gas-fakes.js';
 
 const CODE = readFileSync(new URL('../apps-script/Code.gs', import.meta.url), 'utf8');
 const PUB = 'https://hub.example.xyz';

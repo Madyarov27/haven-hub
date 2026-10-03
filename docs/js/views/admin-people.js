@@ -1,4 +1,4 @@
-/* People (admins): add organizers and guest viewers, send links, reset links, remove people. */
+/* People (admins): add organizers and guest viewers, send links, reset links and passwords, remove people. A row opens the person's page. */
 import { $, esc, icon, avatar, toast, busy, drawer, modal, confirmBox, field, formValues, copy, csvBuild, download, dueInfo, empty, ago, debounce, first } from '../ui.js';
 
 let tab = 'team', q = '';
@@ -13,7 +13,7 @@ export function people(ctx) {
   $('#addg', act).onclick = () => personDrawer(ctx, null, { access: 'viewer' });
   const groups = { team: all.filter(p => p.active && p.access !== 'viewer'), guests: all.filter(p => p.active && p.access === 'viewer'), removed: all.filter(p => !p.active) };
   const tasks = (D.all || []).filter(t => t.status !== 'Dropped');
-  ctx.el.innerHTML = `<p class="lede">Everyone gets a personal link — that's how they sign in. Add someone, then send them their link by email, Telegram or copy-paste.${D.accounts ? ' Organizers can then make a password in their Profile (🔑); after that their link stops working.' : ''}</p>
+  ctx.el.innerHTML = `<p class="lede">Everyone gets a personal link — that's how they sign in. Add someone, then send them their link by email, Telegram or copy-paste.${D.accounts ? ' Organizers can then make a password in their Profile (🔑); after that their link stops working.' : ''}${D.google ? ' They can also press “Sign in with Google” — with the email you saved here, or after connecting Google in their Profile.' : ''} Click someone to open their page.</p>
     <div class="card flush"><div style="padding:16px 20px 0"><div class="toolbar">
       <div class="seg" role="tablist">${[['team', 'Organizers'], ['guests', 'Guests'], ['removed', 'Removed']].map(([k, l]) => `<button role="tab" data-tab="${k}" class="${tab === k ? 'on' : ''}" aria-selected="${tab === k}">${l} <span class="muted">${groups[k].length}</span></button>`).join('')}</div>
       <label class="search"><span class="sr">Search people</span>${icon('search')}<input id="pq" type="search" placeholder="Search…" value="${esc(q)}"></label>
@@ -27,7 +27,7 @@ export function people(ctx) {
         ${p.active ? `<td data-l="Area"><input class="inl" data-area="${esc(p.key)}" value="${esc(p.area || '')}" list="p-areas" placeholder="—" aria-label="Area of ${esc(p.name)}"></td>
         <td data-l="Access"><select class="inl pill ${esc(p.access)}" data-acc="${esc(p.key)}" aria-label="Access of ${esc(p.name)}">${ACCESS.map(([v]) => `<option value="${v}" ${v === p.access ? 'selected' : ''}>${v === 'viewer' ? 'guest' : v}</option>`).join('')}</select></td>`
         : `<td data-l="Area">${esc(p.area || '—')}</td><td><span class="pill ${esc(p.access)}">${esc(p.access)}</span></td>`}
-        <td data-l="Reach" class="nowrap">${p.password ? `<span class="pill ok" title="Signs in with a username and password">${icon('key')} password</span> ` : ''}${p.telegram ? `<span class="pill ok" title="Telegram connected">${icon('message')} TG</span> ` : ''}${p.email ? `<span class="pill" title="${esc(p.email)}">${icon('mail')} email</span>` : ''}${!p.telegram && !p.email ? '<span class="muted small">no reminders yet</span>' : ''}</td>
+        <td data-l="Reach" class="nowrap">${p.google ? `<span class="pill ok" title="Signs in with Google${p.google_email ? ': ' + esc(p.google_email) : ''}">G Google</span> ` : ''}${p.password ? `<span class="pill ok" title="Signs in with a username and password">${icon('key')} password</span> ` : ''}${p.telegram ? `<span class="pill ok" title="Telegram connected">${icon('message')} TG</span> ` : ''}${p.email ? `<span class="pill" title="${esc(p.email)}">${icon('mail')} email</span>` : ''}${!p.telegram && !p.email ? '<span class="muted small">no reminders yet</span>' : ''}</td>
         <td data-l="Tasks" class="nowrap">${p.access === 'viewer' ? '—' : `${open.length} open${over.length ? ` · <span class="due over">${over.length} overdue</span>` : ''}`}</td>
         <td data-l="Last active" class="small muted nowrap">${esc(seen[p.name] ? ago(seen[p.name], tz) : 'never')}</td>
         <td class="cb"><div class="rel"><button class="icon-btn" data-menu="${esc(p.key)}" aria-label="Actions for ${esc(p.name)}">${icon('more')}</button></div></td></tr>`;
@@ -54,16 +54,21 @@ export function people(ctx) {
   $('#ptbl').onclick = e => {
     if (e.target.closest('select,input')) return;
     const m = e.target.closest('[data-menu]');
-    if (m) { e.stopPropagation(); return rowMenu(ctx, m, all.find(p => p.key === m.dataset.menu)); }
-    const tr = e.target.closest('tr[data-key]'); if (tr) personDrawer(ctx, tr.dataset.key);
+    if (m) { e.stopPropagation(); return personMenu(ctx, m, all.find(p => p.key === m.dataset.menu)); }
+    const tr = e.target.closest('tr[data-key]'); if (!tr) return;
+    const p = all.find(x => x.key === tr.dataset.key);
+    if (p && p.active && p.access !== 'viewer') ctx.go('team/' + p.key); else personDrawer(ctx, tr.dataset.key);
   };
 }
 
-function rowMenu(ctx, btn, p) {
+/** The ⋯ menu of a person (People table and their own page). */
+export function personMenu(ctx, btn, p) {
   document.querySelectorAll('.menu').forEach(x => x.remove());
   const m = document.createElement('div'); m.className = 'menu'; m.setAttribute('role', 'menu');
-  m.innerHTML = p.active ? `<button data-a="edit">${icon('edit')} Edit</button>${p.password ? '' : `<button data-a="link">${icon('link')} Get link & invite message</button>`}${p.email ? `<button data-a="invite">${icon('mail')} Email ${p.password ? 'how to sign in' : 'the invite'}</button>` : ''}
-    <hr><button data-a="reset">${icon('refresh')} ${p.password ? 'Reset sign-in (forgot password)' : 'Reset link (old one stops working)'}</button><button data-a="remove" class="danger">${icon('trash')} Remove from the team</button>`
+  const page = p.active && p.access !== 'viewer' && !location.hash.startsWith('#/team/');
+  m.innerHTML = p.active ? `${page ? `<a href="#/team/${esc(p.key)}" role="menuitem">${icon('user')} Open their page</a>` : ''}<button data-a="edit">${icon('edit')} Edit</button>${p.password ? '' : `<button data-a="link">${icon('link')} Get link & invite message</button>`}${p.email ? `<button data-a="invite">${icon('mail')} Email ${p.password ? 'how to sign in' : 'the invite'}</button>` : ''}
+    ${p.password ? `<button data-a="pw">${icon('key')} Send a password reset link</button>` : ''}
+    <hr><button data-a="reset">${icon('refresh')} ${p.password || p.google ? 'Reset sign-in (start over with a new link)' : 'Reset link (old one stops working)'}</button><button data-a="remove" class="danger">${icon('trash')} Remove from the team</button>`
     : `<button data-a="edit">${icon('edit')} Edit</button><button data-a="react">${icon('userPlus')} Add back to the team</button>`;
   btn.parentElement.appendChild(m);
   const off = e => { if (!m.contains(e.target)) { m.remove(); document.removeEventListener('click', off); } };
@@ -72,11 +77,12 @@ function rowMenu(ctx, btn, p) {
     const a = e.target.closest('[data-a]'); if (!a) return; m.remove();
     const k = a.dataset.a;
     if (k === 'edit') return personDrawer(ctx, p.key);
+    if (k === 'pw') return passwordReset(ctx, p);
     if (k === 'link') { const r = await ctx.api.post('person.link', { key: p.key }); return r.ok ? linkModal(ctx, p, r) : toast(r.error, 'err'); }
     if (k === 'invite') { const r = await ctx.api.post('person.invite', { key: p.key }); return r.ok ? toast(`Invite emailed to ${p.email}.`) : toast(r.error, 'err'); }
     if (k === 'reset') {
-      if (!await confirmBox(p.password
-        ? { title: `Reset ${first(p.name)}'s sign-in?`, text: 'Their password is removed, they are signed out everywhere and Telegram is disconnected. You get a new personal link to send them — with it they can make a new password.', ok: 'Reset sign-in', danger: true }
+      if (!await confirmBox(p.password || p.google
+        ? { title: `Reset ${first(p.name)}'s sign-in?`, text: `Their ${p.password ? 'password is removed' : 'Google account is disconnected'}, they are signed out everywhere and Telegram is disconnected. You get a new personal link to send them.${p.password ? ' Only forgot the password? Use “Send a password reset link” instead — it keeps everything else.' : ''}`, ok: 'Reset sign-in', danger: true }
         : { title: `Reset ${first(p.name)}'s link?`, text: 'Their current link stops working immediately and Telegram is disconnected. Use this if a link was shared by mistake.', ok: 'Reset link', danger: true })) return;
       const r = await ctx.api.post('person.resetLink', { key: p.key }); if (!r.ok) return toast(r.error, 'err');
       linkModal(ctx, p, r, 'New link — send it to ' + first(p.name)); ctx.refresh({ silent: true });
@@ -183,6 +189,25 @@ export function personDrawer(ctx, key, preset, fromApplication) {
     if (p) { toast('Saved.'); ctx.refresh({ silent: true }); return; }
     linkModal(ctx, r.person, r, r.emailed ? `Invite emailed to ${r.person.email} ✓` : 'Send them their link');
     ctx.refresh({ silent: true });
+  };
+}
+
+/** Forgot their password (own server): a one-time link to choose a new one — the username, Telegram and everything else stay. */
+export async function passwordReset(ctx, p) {
+  const m = modal({ title: `New password for ${first(p.name)}`, size: 'sm', body: `<p>${esc(first(p.name))} gets a link to choose a new password. It works <b>once</b>, for <b>24 hours</b>. Their username, Telegram and tasks stay as they are; every device is signed out when they use it.</p>
+      <div class="actions" style="margin-top:4px">${p.telegram ? `<button class="btn primary" data-send="telegram">${icon('message')} Send it on Telegram</button>` : ''}${p.email ? `<button class="btn ${p.telegram ? 'soft' : 'primary'}" data-send="email">${icon('mail')} Email it</button>` : ''}<button class="btn ghost" data-send="">${icon('link')} Just give me the link</button></div>
+      <div id="pr-out"></div>` });
+  m.el.onclick = async e => {
+    const b = e.target.closest('[data-send]'); if (!b) return;
+    busy(b, true, 'Making the link…');
+    const r = await ctx.api.post('account.resetLink', { key: p.key, send: b.dataset.send });
+    busy(b, false);
+    if (!r.ok) return toast(r.error, 'err');
+    if (r.sent) toast(r.sent === 'telegram' ? `Sent to ${first(p.name)} on Telegram.` : `Emailed to ${p.email}.`);
+    const tg = `https://t.me/share/url?url=${encodeURIComponent(r.link)}&text=${encodeURIComponent(r.message.replace(r.link, '').trim())}`;
+    $('#pr-out', m.el).innerHTML = `<div class="field" style="margin-top:14px"><label>Reset link${r.sent ? ' (already sent — copy it only if needed)' : ''}</label><div class="linkbox"><input readonly value="${esc(r.link)}"><button class="btn soft" data-c="link">${icon('copy')} Copy</button></div></div>
+      <div class="actions"><button class="btn ghost sm" data-c="msg">${icon('copy')} Copy the message</button><a class="btn ghost sm" href="${esc(tg)}" target="_blank" rel="noopener">${icon('send')} Share on Telegram</a></div>`;
+    $('#pr-out', m.el).onclick = ev => { const c = ev.target.closest('[data-c]'); if (c) copy(c.dataset.c === 'link' ? r.link : r.message, 'Copied — send it privately.'); };
   };
 }
 

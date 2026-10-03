@@ -1,47 +1,55 @@
 # Haven Hub
 
-**The free team hub for [Hack Club Haven](https://haven.hackclub.com) organizers.** Every organizer gets their own task list, leads get a proper admin dashboard, and your event gets a public page — all running on a Google Sheet you own.
+**The free team hub for [Hack Club Haven](https://haven.hackclub.com) organizers.** Every organizer gets their own task list, leads get a real dashboard, and your event gets a public page — all running on a Google Sheet you own.
 
-**→ [Set up your Haven (about 10 minutes)](setup.md)** · **Open the website: https://notazizelse.github.io/haven-hub/**
+**→ [Take the 2-minute tour](https://notazizelse.github.io/haven-hub/?demo=1&tour=1)** (the real app on a made-up team) · **[What you get](https://notazizelse.github.io/haven-hub/#/about)** · **[Set up your Haven — about 10 minutes](setup.md)** · live example: **[haventash.xyz](https://haventash.xyz)**
+
+![The admin overview of a made-up Haven](docs/assets/tour/overview.webp)
 
 | For organizers | For leads & admins | For everyone else |
 |---|---|---|
-| Their tasks only: steps, deadline, who to ask | Overview: overdue, blocked, next 7 days, milestones, workload chart | Public event page: countdown, signup link, progress |
-| **Start** · **Done + proof** (photo, file, link) · **I'm blocked** | All-tasks table: search, filters, bulk reassign/shift, CSV import | **Join the team** form → Applications |
-| Reminders by email or Telegram the evening before | Review proof: approve or ask for a redo | Read-only **guest links** for HQ, mentors, sponsors |
-| A message whenever their tasks are added, removed, moved or re-dated | Admins get one summary of every change and who was told how | |
-| Month **calendar**: tasks, meetings, milestones | People: add organizers, invite by email/Telegram, reset links, remove + reassign | |
-| Team, rules, profile · on your own server: **username + password** sign-in | Timeline, scorecards, volunteer-hours CSV, settings, Telegram bot · **Export CSV → edit → Update the whole plan** | |
+| **My tasks** only: steps, deadline, who to ask — **Start**, **Done + proof**, **I'm blocked** | **Overview**: overdue, blocked, next 7 days, milestones, workload chart | **Public page**: countdown, HQ signup link, sponsors, progress |
+| Reminders by Telegram or email the evening before | **All tasks**: filters, bulk edits, CSV import, *update the whole plan* | **Join the team** form with *Sign up with Google* |
+| A message whenever their tasks change | **Review** proof, **Timeline**, **Scorecards** | Read-only **guest links** for HQ, mentors, sponsors |
+| **Files**: posters, logos, Canva links — and what each task needs | **Team** + a page per person: job, contacts, work, hours, activity | |
+| **Calendar**, **Team**, **Rules**, **Profile** (photo, reminders, Google or password) | **People** (invite, roles, password reset links), **Applications** (spots people already on the team), **Sponsors** (drop a logo), **Settings**, Telegram bot | |
 
 ## How it works
 
-- **Backend:** one file, [`apps-script/Code.gs`](apps-script/Code.gs), bound to a Google Sheet and deployed as an Apps Script web app. The Sheet *is* the database — tabs for Settings, People, Tasks, Log, Meetings, Rules, Milestones and Applications. It also sends email (MailApp) and runs an optional team-only Telegram bot.
-- **Frontend:** a static site in [`docs/`](docs/) (plain ES modules, no build step), served by GitHub Pages and **shared by every Haven**. `?hub=<deployment id>` picks the Haven. Personal links add `&u=<name>&t=<secret>`; the site keeps that key in the browser and removes it from the address bar.
-- **Or on your own server:** [`server/`](server/) runs the *same* `Code.gs` on Node with SQLite. No root or Docker needed; Cloudflare Tunnel supplies the domain + HTTPS; the Telegram bot runs on a webhook; there's a one-click move from the Google Sheet. See [setup.md → Run it on your own server](setup.md#run-it-on-your-own-server-optional).
-- **Auth:** long random per-person links, checked on the server for every action. Roles: admin, lead, member, guest viewer.
-- **Brand:** colours, fonts (Darumadrop One, Jua, Nunito), logos and Daven come from HQ's [public Haven brand guide](https://www.figma.com/design/V1S8l3ju7K75ABGowht1gj/-PUBLIC--Haven-Brand-Guide).
+- **Backend:** one file, [`apps-script/Code.gs`](apps-script/Code.gs), bound to a Google Sheet and deployed as an Apps Script web app. The Sheet *is* the database. It also sends email and runs an optional team-only Telegram bot.
+- **Website:** a static site in [`docs/`](docs/) (plain ES modules, no build step), served by GitHub Pages and **shared by every Haven**. `?hub=<deployment id>` picks the Haven.
+- **Or your own server:** [`server/`](server/) runs the *same* `Code.gs` on Node with SQLite — your domain, a Telegram webhook, backups, passwords and Google sign-in. No root or Docker needed.
+- **Sign-in:** personal links to start; then *Sign in with Google* or a password (own server). Roles: admin, lead, member, guest viewer — enforced by the backend.
+- **Brand:** colours, fonts and Daven from HQ's [public Haven brand guide](https://www.figma.com/design/V1S8l3ju7K75ABGowht1gj/-PUBLIC--Haven-Brand-Guide).
+
+The full picture — data, sign-in, files, messages, the demo — is in **[ARCHITECTURE.md](ARCHITECTURE.md)**.
 
 ## Repo
 
 ```
-apps-script/Code.gs        the whole backend — paste it into Apps Script
-apps-script/appsscript.json optional manifest
-docs/                      the website (GitHub Pages: main /docs)
-dev/                       local demo: Apps Script fakes + made-up data, python dev/serve.py
-server/                    self-hosting: Node + SQLite runtime for Code.gs, Telegram webhook, email outbox, hubctl
-tests/                     node --test tests/*.test.mjs — runs the real Code.gs against the fakes (and on the server runtime)
-setup.md                   the setup guide
+apps-script/Code.gs     the whole backend — paste it into Apps Script
+docs/                   the website (GitHub Pages: main /docs)
+  js/views/             one file per page (landing = the showcase, tour = the guided tour)
+  demo/                 the demo: Apps Script fakes, a made-up team, a copy of Code.gs (npm run sync)
+  assets/tour/          showcase screenshots (node dev/screenshots.mjs)
+server/                 own server: Node + SQLite runtime for Code.gs, Telegram webhook, outbox, Google sign-in, hubctl
+tests/                  node --test — the real Code.gs on the fakes, and the real server over HTTP
+dev/                    serve.py (local demo), screenshots.mjs
+tools/                  sync-demo.mjs
+setup.md                the setup guide          ARCHITECTURE.md   how it works inside
+CHANGELOG.md            what changed             CONTRIBUTING.md   how to help
 ```
 
 ## Develop
 
 ```bash
-python dev/serve.py                 # then open http://localhost:5178/docs/?demo=1
-node --test tests/*.test.mjs
+python dev/serve.py        # then open http://localhost:5178/docs/?demo=1  (&as=admin|lead|member|viewer|guest, or &tour=1)
+npm run sync               # after changing Code.gs: copy it into docs/demo/
+npm test
 ```
 
-`?demo=1` runs the real `Code.gs` in the browser with made-up data (`&as=admin|lead|member|viewer|guest`, or `?demo=fresh#/setup`).
+No dependencies for the website or the tests. The server needs Node 22.13+ (it uses the built-in `node:sqlite`) and `nodemailer` for email.
 
 ---
 
-Built by the Haven Tashkent organizers for every Haven. Not an official Hack Club HQ product. MIT licence.
+Made by the Haven Tashkent organizers for every Haven. Not an official Hack Club HQ product. [MIT licence](LICENSE).

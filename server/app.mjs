@@ -8,9 +8,10 @@ import { gzipSync } from 'node:zlib';
 import { openStore } from './store.mjs';
 import { createRuntime } from './runtime.mjs';
 import { createTelegram, createMailer, drainOutbox } from './outbox.mjs';
-import { createAccounts, SESSION_RE, usernameProblem, passwordProblem } from './accounts.mjs';
+import { createAccounts, SESSION_RE, usernameProblem, passwordProblem, sha256 } from './accounts.mjs';
+import { createGoogle } from './google.mjs';
 import { createLibrary } from './library.mjs';
-import { loadBackend } from '../dev/gas-fakes.js';
+import { loadBackend } from '../docs/demo/gas-fakes.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
@@ -33,9 +34,10 @@ export async function createHub(opts = {}) {
   const runtime = createRuntime({ store, filesDir, env, telegram });
   const accounts = createAccounts({ store });
   const library = opts.library || createLibrary({ dataDir, log });
+  const google = createGoogle({ fetchImpl: opts.googleFetch || fetch, clientIds: () => [env.GOOGLE_CLIENT_ID] });
   const started = Date.now();
   // the website may live elsewhere (e.g. GitHub Pages) and call this server's /api — allow those origins
-  const origins = String(env.ALLOWED_ORIGINS || 'https://notazizelse.github.io').split(/[\s,]+/).filter(Boolean);
+  const origins = String(env.ALLOWED_ORIGINS || 'https://notazizelse.github.io') // the shared website.split(/[\s,]+/).filter(Boolean);
   const linkBase = () => String(env.SITE_URL || env.publicUrl() || '').replace(/\/+$/, '');
   const home = () => linkBase() + (env.HUB_NAME ? '/?hub=' + env.HUB_NAME : '');
 
@@ -45,6 +47,7 @@ export async function createHub(opts = {}) {
     setWebhook: () => { pendingWebhook = true; },
     checkSetupCode: c => { const ok = same(c, store.getMeta('setup_code')) && Number(store.getMeta('setup_code_exp', 0)) > Date.now(); if (ok) store.delMeta('setup_code'); return ok; },
     account: key => accounts.info(key),   // password sign-in (Code.gs: account_, dropAccount_)
+    googleClientId: () => String(env.GOOGLE_CLIENT_ID || ''),
     dropAccount: key => accounts.drop(key),
     stats: () => ({ uptimeMin: Math.round((Date.now() - started) / 6e4), outbox: store.outboxStats(), lastBackup: store.getMeta('last_backup', ''), publicUrl: env.publicUrl(), email: mailer.configured() }),
   };
@@ -73,6 +76,7 @@ export async function createHub(opts = {}) {
     botinfo: async () => telegram.refresh(store.getProp('BOT_TOKEN')).catch(() => {}),
   };
   async function api(method, params, ip = '') {
+    Object.keys(params).forEach(k => { if (k[0] === '_') delete params[k]; }); // nothing from outside may look like the server's own notes
     if (ACCOUNT[params.action]) return method === 'POST' ? ACCOUNT[params.action](params, ip) : { ok: false, error: 'Use POST.' };
     if (PRE[params.action]) await PRE[params.action](params);
     const out = await run(() => { const no = signedIn(params); return no || (method === 'GET' ? be.get(params) : be.post(params)); });
@@ -84,38 +88,58 @@ export async function createHub(opts = {}) {
     return out;
   }
 
-  // ------------------------------------------------------------------ password sign-in (server only; see accounts.mjs)
+  // ------------------------------------------------------------------ sign-in on the server: passwords (accounts.mjs), Google (google.mjs), sessions
   const signedOut = { ok: false, code: 'auth', reason: 'session', error: 'You were signed out. Sign in again.' };
   const useYourPassword = username => ({ ok: false, code: 'auth', reason: 'password', username, error: 'You sign in with your password now — your old link was switched off.' });
+  const useGoogle = email => ({ ok: false, code: 'auth', reason: 'google', username: email || '', error: `You sign in with Google now${email ? ' (' + email + ')' : ''} — your old link was switched off.` });
   const person = (fn, arg) => { be.call('resetMemo_'); const p = be.call(fn, arg); return p && p.active !== 'no' ? p : null; };
-  /** Runs inside the request: a session id becomes the person's token for Code.gs; the link of someone who made a password is refused. */
+  /** Runs inside the request: a session id becomes the person's token for Code.gs. The link of someone who made a password or connected Google is refused. */
   function signedIn(params) {
     const t = String(params.t || '');
     if (!t) return null;
     if (SESSION_RE.test(t)) {
       const key = accounts.session(t), p = key && person('findPerson_', key);
-      if (!p || !p.token || !accounts.info(p.key)) return signedOut;
+      if (!p || !p.token) return signedOut;
       params.t = p.token; params.u = p.key;
       return null;
     }
-    const p = person('person_', t), acc = p ? accounts.info(p.key) : accounts.retired(t);
+    const p = person('person_', t);
+    if (p && p.google_sub && !accounts.info(p.key)) return useGoogle(p.google_email);
+    const acc = p ? accounts.info(p.key) : accounts.retired(t);
     return acc ? useYourPassword(acc.username) : null;
   }
+  /** Who is asking: a session or a working personal link → the People row (inside run). */
+  function caller(b) {
+    const t = String(b.t || '');
+    if (SESSION_RE.test(t)) { const key = accounts.session(t); return key ? person('findPerson_', key) : null; }
+    const p = t ? person('person_', t) : null;
+    if (!p || (b.u && b.u !== p.key) || accounts.info(p.key) || p.google_sub) return null; // a switched-off link is no key any more
+    return p;
+  }
+  const nonces = new Map(); // Google sign-ins already used (replay protection): nonce → expiry
+  async function googleClaims(b, ip) {
+    if (!env.GOOGLE_CLIENT_ID) return { error: 'Google sign-in is not set up on this hub yet.' };
+    if (limited(ip, 'google', 40, 15 * 60e3)) return { error: 'Too many tries from here — wait 15 minutes.' };
+    const nonce = String(b.nonce || '');
+    if (nonce.length < 16 || nonces.has(nonce)) return { error: 'That Google sign-in was already used — press the button again.' };
+    try { const c = await google.verifyIdToken(b.idToken, nonce); nonces.set(nonce, Date.now() + 2 * 3600e3); return { claims: c }; }
+    catch (e) { log('google sign-in refused: ' + e.message); return { error: 'Google sign-in failed (' + e.message + ') — press the button again.' }; }
+  }
+  const resetKey = k => 'pwr:' + sha256(k);
+  const readReset = k => { let x = null; try { x = JSON.parse(store.getMeta(resetKey(String(k || '')), '') || 'null'); } catch (e) { x = null; } return x && x.exp > Date.now() ? x : null; };
+  const resetGone = { ok: false, code: 'expired', error: 'This reset link was used already or is older than 24 hours. Ask your lead for a new one.' };
   const ACCOUNT = {
-    /** From a working personal link: make a username + password. Every old link stops working; this device stays signed in. */
+    /** From a working personal link (or signed in with Google): make a username + password. Every old link stops working; this device stays signed in. */
     async 'account.create'(b) {
       const username = String(b.username || '').trim().toLowerCase(), password = String(b.password || '');
-      const who = await run(() => {
-        const p = SESSION_RE.test(String(b.t || '')) ? null : person('person_', String(b.t || ''));
-        return p && (!b.u || b.u === p.key) ? { key: p.key, viewer: be.call('access_', p) === 'viewer' } : null;
-      });
+      const who = await run(() => { const p = caller(b); return p ? { key: p.key, token: p.token, viewer: be.call('access_', p) === 'viewer' } : null; });
       if (!who) return { ok: false, code: 'auth', error: 'Open your personal link first, then make your account.' };
       if (who.viewer) return { ok: false, error: "Guest links don't use passwords." };
       if (accounts.info(who.key)) return { ok: false, error: 'You already have an account — change your password in Profile.' };
       const bad = usernameProblem(username) || passwordProblem(password, username);
       if (bad) return { ok: false, error: bad };
       if (store.accountByName(username)) return { ok: false, error: 'That username is taken — pick another one.' };
-      const save = await accounts.create(who.key, username, password, String(b.t));
+      const save = await accounts.create(who.key, username, password, who.token);
       const err = await run(() => { const e = save(); if (!e) { be.call('resetMemo_'); be.call('rotateToken_', who.key); } return e; });
       if (err) return { ok: false, error: err };
       return { ok: true, u: who.key, t: accounts.newSession(who.key), username };
@@ -136,6 +160,24 @@ export async function createHub(opts = {}) {
       if (!p) { accounts.drop(r.key); return { ok: false, error: 'Wrong username or password.' }; }
       return { ok: true, u: p.key, t: accounts.newSession(p.key) };
     },
+    /** "Sign in with Google": a Google account that is on the team gets a session; anyone else gets a ticket for the join form. */
+    async 'auth.google'(b, ip) {
+      const g = await googleClaims(b, ip);
+      if (g.error) return { ok: false, error: g.error };
+      const r = await run(() => { be.call('resetMemo_'); return be.call('googleSignIn_', g.claims); });
+      if (!r.ok) return r;
+      return { ok: true, u: r.key, t: accounts.newSession(r.key), name: r.name };
+    },
+    /** Signed in (link, password or session): connect a Google account. A link user gets a session, because their link stops working now. */
+    async 'auth.google.link'(b, ip) {
+      const who = await run(() => { const p = caller(b); return p ? { key: p.key } : null; });
+      if (!who) return signedOut;
+      const g = await googleClaims(b, ip);
+      if (g.error) return { ok: false, error: g.error };
+      const r = await run(() => { be.call('resetMemo_'); return be.call('googleLink_', who.key, g.claims); });
+      if (!r.ok) return r;
+      return Object.assign(r, SESSION_RE.test(String(b.t || '')) ? {} : { u: who.key, t: accounts.newSession(who.key) });
+    },
     /** Signed in: current password + a new one. Every other device is signed out. */
     async 'account.password'(b) {
       const key = accounts.session(b.t);
@@ -145,6 +187,50 @@ export async function createHub(opts = {}) {
       accounts.endOtherSessions(key, b.t);
       await run(() => { const x = person('findPerson_', key); if (x) be.call('log_', x.name, '', 'Password changed', ''); });
       return { ok: true };
+    },
+    /** Admins: a one-time "choose a new password" link for someone who forgot theirs (24 hours). send: 'telegram' | 'email' also sends it to them. */
+    async 'account.resetLink'(b, ip) {
+      if (limited(ip, 'reset', 60, 3600e3)) return { ok: false, error: 'Too many resets — wait an hour.' };
+      const r = await run(() => {
+        const me = caller(b);
+        if (!me || be.call('access_', me) !== 'admin') return { ok: false, code: 'forbidden', error: 'Only admins can reset passwords.' };
+        const p = person('findPerson_', String(b.key || ''));
+        if (!p) return { ok: false, error: 'No such person.' };
+        const acc = accounts.info(p.key);
+        if (!acc) return { ok: false, code: 'no_password', error: `${p.name} has no password — use "Get link" to send their personal link instead.` };
+        return { ok: true, key: p.key, name: p.name, first: String(p.name).split(' ')[0], username: acc.username, chat: p.chat_id, email: p.email, by: me.name };
+      });
+      if (!r.ok) return r;
+      store.metaPrefix('pwr:').forEach(m => { try { if (JSON.parse(m.v).key === r.key) store.delMeta(m.k); } catch (e) { store.delMeta(m.k); } }); // one live reset link per person
+      const k = 'pr_' + code24() + code24();
+      store.setMeta(resetKey(k), JSON.stringify({ key: r.key, exp: Date.now() + 24 * 3600e3 }));
+      const link = linkBase() + '/#/reset?k=' + k;
+      const message = `Hi, ${r.first}! Here is your link to choose a new password for the ${be.call('event_')} Team Hub (your username stays "${r.username}"):\n${link}\n\nIt works once, for 24 hours. Don't share it.`;
+      let sent = '';
+      await run(() => {
+        be.call('resetMemo_');
+        if (b.send === 'telegram' && r.chat) { be.call('tg_', r.chat, message); sent = 'telegram'; }
+        if (b.send === 'email' && r.email && be.call('mail_', r.email, 'Choose a new password', message, ['Choose a new password', link])) sent = 'email';
+        be.call('log_', r.by, '', 'Password reset link', r.name + (sent ? ' (sent by ' + sent + ')' : ''));
+      });
+      return { ok: true, link, message, sent, username: r.username };
+    },
+    async 'account.resetCheck'(b) {
+      const x = readReset(b.k);
+      if (!x) return resetGone;
+      const acc = accounts.info(x.key), name = await run(() => { const p = person('findPerson_', x.key); return p ? p.name : ''; });
+      return acc && name ? { ok: true, username: acc.username, name } : resetGone;
+    },
+    async 'account.resetFinish'(b, ip) {
+      if (limited(ip, 'login', 30, 15 * 60e3)) return { ok: false, error: 'Too many tries from here — wait 15 minutes.' };
+      const x = readReset(b.k);
+      if (!x) return resetGone;
+      const err = await accounts.forceSetPassword(x.key, String(b.password || ''));
+      if (err) return { ok: false, error: err };
+      store.delMeta(resetKey(String(b.k)));
+      accounts.endOtherSessions(x.key, '');
+      await run(() => { const p = person('findPerson_', x.key); if (p) be.call('log_', p.name, '', 'Password reset', 'with the link from an admin'); });
+      return { ok: true, u: x.key, t: accounts.newSession(x.key), username: (accounts.info(x.key) || {}).username };
     },
     async logout(b) { accounts.endSession(b.t); return { ok: true }; },
     async 'logout.all'(b) { const key = accounts.session(b.t); if (!key) return signedOut; accounts.endOtherSessions(key, ''); return { ok: true }; },
@@ -217,6 +303,8 @@ export async function createHub(opts = {}) {
       await once('sched_export', sunday && hour >= 20, () => emailExport());
     }
     await once('sched_backup', hour >= 3, async () => { backup(); store.pruneSessions(); });
+    store.metaPrefix('pwr:').forEach(m => { try { if (JSON.parse(m.v).exp < Date.now()) store.delMeta(m.k); } catch (e) { store.delMeta(m.k); } });
+    nonces.forEach((exp, n) => { if (exp < Date.now()) nonces.delete(n); });
     const pulled = await library.maybeSync(S.files_repo || env.TEAM_REPO || '', S.files_branch || 'main', Number(env.TEAM_REPO_PULL_MIN) || 5);
     if (pulled && pulled.changed && pulled.before) log(`team files: ${(pulled.added || []).length} new or changed, ${(pulled.removed || []).length} removed`);
     if (ready) await call('flushChanges', false); // task-change alerts wait until nobody edited for a minute
@@ -309,7 +397,15 @@ export async function createHub(opts = {}) {
     res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
   };
   const docs = join(ROOT, 'docs');
-  const configJs = () => `// Generated by the Haven Hub server.\nwindow.HUB_CONFIG = ${JSON.stringify({ api: '/api', selfHosted: true, repo: 'https://github.com/notazizelse/haven-hub', latestBackend: be.call('__eval', 'HUB_VERSION'), templateSheet: '' })};\n`;
+  const configJs = () => `// Generated by the Haven Hub server.\nwindow.HUB_CONFIG = ${JSON.stringify({ api: '/api', selfHosted: true, repo: 'https://github.com/notazizelse/haven-hub', latestBackend: be.call('__eval', 'HUB_VERSION'), templateSheet: '', googleClientId: String(env.GOOGLE_CLIENT_ID || '') })};\n`;
+  /** GET /files/pub/<id>: pictures an admin made public (sponsor logos) — anyone may see them, e.g. on haven.hackclub.com. Nothing else is served here. */
+  function publicPicture(id, req, res) {
+    const f = /^[\w-]{10,64}$/.test(id) ? store.getFile(id) : null, folder = store.getProp('PUBLIC_FOLDER_ID');
+    if (!f || !folder || f.folder !== folder || !/^image\/(png|jpeg|webp)$/.test(f.mime) || !existsSync(join(filesDir, f.id))) return send(res, 404, 'Not found', 'text/plain');
+    res.writeHead(200, { 'Content-Type': f.mime, 'Content-Length': f.size, 'Cache-Control': 'public, max-age=86400', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; sandbox", 'Cross-Origin-Resource-Policy': 'cross-origin' });
+    if (req.method === 'HEAD') return res.end();
+    createReadStream(join(filesDir, f.id)).pipe(res);
+  }
 
   async function handle(req, res) {
     const url = new URL(req.url, 'http://x'), path = url.pathname, ip = clientIp(req);
@@ -343,6 +439,7 @@ export async function createHub(opts = {}) {
       }
       if (path === '/healthz') return send(res, 200, { ok: true, version: be.call('__eval', 'HUB_VERSION'), uptimeMin: Math.round((Date.now() - started) / 6e4) });
       if (path.startsWith('/file/d/')) return send(res, 302, '', 'text/plain', { Location: '/' }); // proof files open inside the hub (Show file)
+      if (path.startsWith('/files/pub/') && (req.method === 'GET' || req.method === 'HEAD')) return publicPicture(path.slice(11), req, res);
       if (path.startsWith('/files/raw/') && (req.method === 'GET' || req.method === 'HEAD')) { let rel; try { rel = decodeURIComponent(path.slice(11)); } catch (e) { return send(res, 400, 'Bad path', 'text/plain'); } return library.serve(rel, req, res); }
       if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method not allowed', 'text/plain');
       // the website
@@ -361,6 +458,6 @@ export async function createHub(opts = {}) {
     }
   }
 
-  return { handle, admin, tick, api, webhook, accounts, library, importStart, importFiles, importFinish, backup, store, runtime, be, telegram, env, drain: async () => kick(), drainNow: () => drainOutbox({ store, telegram, mailer, filesDir, log }),
+  return { handle, admin, tick, api, webhook, accounts, library, google, importStart, importFiles, importFinish, backup, store, runtime, be, telegram, env, drain: async () => kick(), drainNow: () => drainOutbox({ store, telegram, mailer, filesDir, log }),
     close: () => store.close() };
 }

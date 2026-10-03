@@ -1,6 +1,6 @@
 /**
  * In-memory fakes of the Google Apps Script services Code.gs uses — enough to run the real backend in Node tests
- * (tests/api.test.mjs) and in the browser (docs/?demo=1 when you serve the repo root). Not used in production.
+ * (tests/api.test.mjs), on your own server (server/runtime.mjs builds on the sheet fakes) and in the browser (docs/?demo=1, the guided tour).
  *
  *   const gas = createGas({ tz: 'Asia/Tashkent' });
  *   const backend = loadBackend(codeText, gas);     // → { doGet, doPost, call(name, ...args) }
@@ -89,7 +89,7 @@ export function formatDate(date, tz, pattern) {
 }
 
 export function createGas(opts = {}) {
-  const tz = opts.tz || 'Asia/Tashkent';
+  const tz = opts.tz || 'UTC';
   const ss = new FakeSpreadsheet(opts.sheetId || '1FakeSheetIdForTheHavenHubDemo0000000000');
   const props = {}, cache = {}, mails = [], telegram = [], triggers = [], files = {}, folders = {};
   let fileSeq = 0;
@@ -100,7 +100,8 @@ export function createGas(opts = {}) {
   const folder = name => {
     const id = 'folder' + (++fileSeq), f = { id, name, getId: () => id, getUrl: () => 'https://drive.google.com/drive/folders/' + id,
       getFiles: () => iter(Object.values(files).filter(x => x.getParents().next() === f)),
-      createFile(b) { const fid = 'file' + (++fileSeq) + 'x'.repeat(20); let desc = ''; const file = { getId: () => fid, getName: () => b.getName(), getBlob: () => b, setDescription(d) { desc = d; return this; }, getDescription: () => desc, getParents: () => iter([f]) }; files[fid] = file; return file; } };
+      setSharing() { return this; },
+      createFile(b) { const fid = 'file' + (++fileSeq) + 'x'.repeat(20); let desc = ''; const file = { getId: () => fid, getName: () => b.getName(), getBlob: () => b, setDescription(d) { desc = d; return this; }, getDescription: () => desc, getParents: () => iter([f]), setSharing() { return this; } }; files[fid] = file; return file; } };
     folders[id] = f; return f;
   };
 
@@ -124,6 +125,11 @@ export function createGas(opts = {}) {
     HtmlService: { createHtmlOutput: () => builder(() => null) },
     MailApp: { sendEmail(o) { mails.push(o); }, getRemainingDailyQuota: () => 100 - mails.length },
     UrlFetchApp: { fetch(url, o) {
+      if (/^https:\/\/oauth2\.googleapis\.com\/tokeninfo\?/.test(url)) { // Google sign-in check: tests set gas._google = idToken => claims (or null)
+        const tok = decodeURIComponent(String(url).split('id_token=')[1] || ''), c = gas._google ? gas._google(tok) : null;
+        return { getContentText: () => JSON.stringify(c || { error: 'invalid_token' }), getResponseCode: () => c ? 200 : 400 };
+      }
+      o = o || {};
       const method = String(url).split('/').pop(), payload = typeof o.payload === 'string' ? JSON.parse(o.payload || '{}') : (o.payload || {});
       telegram.push({ method, payload });
       let res = { ok: true, result: true };
@@ -133,6 +139,7 @@ export function createGas(opts = {}) {
       return { getContentText: () => JSON.stringify(res), getResponseCode: () => 200 };
     } },
     DriveApp: {
+      Access: { ANYONE_WITH_LINK: 'ANYONE_WITH_LINK' }, Permission: { VIEW: 'VIEW' },
       createFolder: folder, getFolderById: id => { if (!folders[id]) throw new Error('no folder'); return folders[id]; },
       getFileById: id => { if (!files[id]) throw new Error('no file'); return files[id]; },
     },

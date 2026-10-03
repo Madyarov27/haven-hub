@@ -1,6 +1,7 @@
 /* Views every organizer sees: My tasks, Calendar (month grid), Team, Rules, Profile (+ password sign-in on own-server hubs). */
-import { $, esc, icon, avatar, kpi, empty, dueInfo, parseLocal, fmtDay, DAY, first, copy, toast, busy, field, plural, confirmBox } from '../ui.js';
+import { $, esc, icon, avatar, kpi, empty, dueInfo, parseLocal, fmtDay, DAY, first, copy, toast, busy, field, plural, confirmBox, bar, ago, debounce, imageData, googleG } from '../ui.js';
 import { taskCard, wireTasks } from '../task-card.js';
+import { googleStart } from '../google.js';
 import { taskDrawer } from './admin-tasks.js';
 
 const byDue = (a, b) => a.due < b.due ? -1 : a.due > b.due ? 1 : 0;
@@ -123,15 +124,33 @@ export function calendar(ctx) {
   if (tl) wireTasks(tl, ctx, t => { ctx.patchTask(t); calendar(ctx); });
 }
 
+/** The team: photo cards (everyone in one grid, or grouped by area); each opens that person's page. Leads also see how each person is doing. */
+let teamQ = '', teamBy = 'all';
 export function team(ctx) {
-  const D = ctx.D, areas = [...new Set(D.team.map(p => p.area || 'Team'))];
-  let h = `<p class="lede">${D.team.length} people on the ${esc(D.event.name)} team.</p>`;
-  h += areas.map(a => `<h3 class="section-t">${esc(a)}</h3><div class="cards">` + D.team.filter(p => (p.area || 'Team') === a).map(p => {
-    const handle = /^@\w+$/.test(p.handle || '') ? `<a href="https://t.me/${esc(p.handle.slice(1))}" target="_blank" rel="noopener">${esc(p.handle)}</a>` : '';
-    return `<div class="card"><div class="person-card">${avatar(p.name)}<div class="info"><b>${esc(p.name)}</b>${p.key === D.me.key ? ' <span class="pill ip">you</span>' : ''}${p.access === 'admin' || p.access === 'lead' ? ` <span class="pill ${p.access}">${esc(p.access)}</span>` : ''}
-      <div class="small muted">${esc(p.role || '')}</div>${handle ? `<div class="small">${handle}</div>` : ''}${p.one ? `<p class="small" style="margin:6px 0 0">${esc(p.one)}</p>` : ''}</div></div></div>`;
-  }).join('') + `</div>`).join('');
+  const D = ctx.D, tz = ctx.tz, lead = ctx.isLead || ctx.isViewer, all = (D.all || []).filter(t => t.status !== 'Dropped'), seen = D.lastSeen || {};
+  const areaOf = p => p.area || 'Team', rank = a => a === 'Lead' ? '0' : '1' + a;
+  const list = D.team.filter(p => !teamQ || (p.name + ' ' + p.role + ' ' + p.area + ' ' + (p.handle || '')).toLowerCase().includes(teamQ.toLowerCase()))
+    .sort((a, b) => rank(areaOf(a)).localeCompare(rank(areaOf(b))) || a.name.localeCompare(b.name));
+  const areas = [...new Set(list.map(areaOf))], noPhoto = D.team.filter(p => !p.photo).length;
+  const cardOf = p => {
+    const mine = all.filter(t => t.owner === p.key), done = mine.filter(t => t.status === 'Done').length, open = mine.filter(t => t.status !== 'Done');
+    const over = open.filter(t => dueInfo(t, tz).over).length, blk = open.filter(t => t.status === 'Blocked').length;
+    return `<a class="card pcard ${lead && (over || blk) ? 'warn' : ''}" href="#/team/${esc(p.key)}">${avatar(p.name, 'xl', p.photo)}
+      <div class="pc-name"><b>${esc(p.name)}</b>${p.key === D.me.key ? ' <span class="pill ip">you</span>' : ''}${p.access === 'admin' || p.access === 'lead' ? ` <span class="pill ${p.access}">${esc(p.access)}</span>` : ''}</div>
+      <div class="small muted">${esc(p.role || '—')}${teamBy === 'all' && p.area ? ` · <span class="tag">${esc(p.area)}</span>` : ''}</div>${p.one ? `<p class="small pc-one">${esc(p.one)}</p>` : ''}
+      ${lead && mine.length ? `<div class="pc-stats">${bar(100 * done / mine.length, over ? 'warn' : '')}<span class="small"><b>${done}/${mine.length}</b> done${over ? ` · <span class="due over">${over} overdue</span>` : ''}${blk ? ` · <span class="due over">${blk} blocked</span>` : ''}</span></div>` : ''}
+      ${lead ? `<div class="small muted">${seen[p.name] ? 'active ' + esc(ago(seen[p.name], tz)) : 'no activity yet'}</div>` : ''}</a>`;
+  };
+  let h = `<div class="toolbar"><p class="lede" style="margin:0;flex:1 1 260px">${D.team.length} people on the ${esc(D.event.name)} team. ${lead ? 'Open anyone to see everything about them.' : 'Open anyone to see what they do.'}</p>
+    <div class="seg" role="group" aria-label="Show"><button data-by="all" class="${teamBy === 'all' ? 'on' : ''}">Everyone</button><button data-by="area" class="${teamBy === 'area' ? 'on' : ''}">By area</button></div>
+    <label class="search"><span class="sr">Search the team</span>${icon('search')}<input id="tq" type="search" placeholder="Search…" value="${esc(teamQ)}"></label></div>`;
+  if (!D.me.photo && !ctx.isViewer && !(ctx.api.DEMO && ctx.api.params.has('shot'))) h += `<div class="banner info">${icon('camera')}<div>Add your photo so the team knows who you are — <a href="#/profile">Profile → Photo</a>.${lead && noPhoto > 1 ? ` (${noPhoto} people have none yet.)` : ''}</div></div>`;
+  if (!list.length) h += `<div class="card">${empty({ title: 'Nobody matches', text: 'Try another name.' })}</div>`;
+  else if (teamBy === 'all') h += `<div class="cards people-cards">${list.map(cardOf).join('')}</div>`;
+  else h += areas.map(a => `<h3 class="section-t">${esc(a)} <span class="small muted">${list.filter(p => areaOf(p) === a).length}</span></h3><div class="cards people-cards">${list.filter(p => areaOf(p) === a).map(cardOf).join('')}</div>`).join('');
   ctx.el.innerHTML = h;
+  ctx.el.querySelector('.seg').onclick = e => { const b = e.target.closest('[data-by]'); if (b) { teamBy = b.dataset.by; team(ctx); } };
+  $('#tq').oninput = debounce(e => { teamQ = e.target.value.trim(); const pos = e.target.selectionStart; team(ctx); const i = $('#tq'); i.focus(); i.setSelectionRange(pos, pos); }, 200);
 }
 
 export function rules(ctx) {
@@ -147,7 +166,14 @@ export function rules(ctx) {
 export function profile(ctx) {
   const D = ctx.D, me = D.me, bot = D.bot, s = ctx.api.session() || {}, viewer = ctx.isViewer, acc = me.account, start = me.tg_start || s.t || '';
   const NOTE = { auto: 'Telegram if connected, otherwise email', telegram: 'Telegram only', email: 'Email only', both: 'Telegram and email', none: 'No reminders' };
-  let h = `<div class="card"><div class="person-card">${avatar(me.name, 'lg')}<div class="info"><h2>${esc(me.name)}</h2><div class="muted">${esc(me.role || '')} · <span class="pill ${esc(me.access)}">${esc(me.access)}</span></div></div></div></div>`;
+  const gid = ctx.api.googleClient(D);
+  let h = `<div class="card"><div class="person-card profile-me"><div class="ph-pic">${avatar(me.name, 'xl', me.photo)}${viewer ? '' : `<label class="ph-cam" title="Change your photo">${icon('camera')}<input type="file" accept="image/*" id="me-photo" hidden></label>`}</div>
+    <div class="info"><h2>${esc(me.name)}</h2><div class="muted">${esc(me.role || '')} · <span class="pill ${esc(me.access)}">${esc(me.access)}</span></div>
+    ${viewer ? '' : `<div class="actions" style="margin-top:10px"><label class="btn soft sm">${icon('camera')} ${me.photo ? 'Change photo' : 'Add your photo'}<input type="file" accept="image/*" id="me-photo2" hidden></label>${me.photo ? '<button class="btn ghost sm" id="me-nophoto">Remove</button>' : ''}<a class="btn ghost sm" href="#/team/${esc(me.key)}">${icon('user')} See your page</a></div>
+      <p class="small muted" style="margin:6px 0 0">The team sees it next to your name. It never appears on the public page.</p>`}</div></div></div>`;
+  if (gid && !viewer) h += `<div class="card"><div class="card-h"><h3>Sign in with Google</h3>${me.google ? `<span class="pill ok">${icon('check')} connected</span>` : '<span class="pill">not connected</span>'}</div>
+    ${me.google ? `<p style="margin-top:0">You can sign in on any phone or computer with <b>${esc(me.google_email || 'your Google account')}</b> — press “Sign in with Google”.</p><div class="actions"><button class="btn ghost" id="g-off">Disconnect Google</button></div>`
+      : `<p style="margin-top:0">Connect your Google account once — after that “Sign in with Google” is all you need, on any device.${ctx.api.isServerHub() || ctx.api.SELF ? ' Your personal link then stops working, so nobody else can use it.' : ''}</p><button class="btn gbtn" id="g-on">${googleG} Connect Google</button>`}</div>`;
   if (D.accounts && !viewer) h += accountCard(D, me, acc);
   if (!viewer) {
     h += `<div class="grid-2"><div class="card"><div class="card-h"><h3>Reminders</h3><span class="sub">the evening before a deadline, at ${esc(D.event.reminderHour)}:00</span></div>
@@ -175,6 +201,20 @@ export function profile(ctx) {
     const r = await ctx.api.post('prefs', { notify: f.notify.value, email: f.email.value.trim() }); busy(b, false);
     if (!r.ok) return toast(r.error, 'err');
     Object.assign(D.me, r.me); toast('Saved.');
+  };
+  const setPhoto = async v => {
+    const r = await ctx.api.post('photo.save', { photo: v });
+    if (!r.ok) return toast(r.error, 'err');
+    D.me.photo = r.photo; const t = (D.team || []).find(x => x.key === me.key); if (t) t.photo = r.photo;
+    ctx.photos(); ctx.api.cache(D); toast(v ? 'Photo saved — the team sees it now.' : 'Photo removed.'); ctx.render();
+  };
+  ['#me-photo', '#me-photo2'].forEach(sel => { const i = $(sel); if (i) i.onchange = async () => { if (!i.files[0]) return; try { setPhoto(await imageData(i.files[0], { max: 192, square: true, quality: 0.82 })); } catch (err) { toast(err.message, 'err'); } }; });
+  const np = $('#me-nophoto'); if (np) np.onclick = () => setPhoto('');
+  const gon = $('#g-on'); if (gon) gon.onclick = () => { if (ctx.api.DEMO) return toast('Google sign-in is switched off in the demo.', 'err'); googleStart(gid, 'link', { back: '#/profile', hint: me.email || '' }); };
+  const goff = $('#g-off'); if (goff) goff.onclick = async () => {
+    if (!await confirmBox({ title: 'Disconnect Google?', text: ctx.api.isServerHub() && !acc ? 'You then need your personal link (or a new one from your lead) to sign in on another device.' : 'You can connect it again any time.', ok: 'Disconnect' })) return;
+    const r = await ctx.api.post('auth.google.unlink'); if (!r.ok) return toast(r.error, 'err');
+    D.me.google = false; D.me.google_email = ''; toast('Google disconnected.'); ctx.render();
   };
   const c = $('#tgcopy'); if (c) c.onclick = () => copy(`/start ${start}`, 'Copied — paste it in the bot chat.');
   const d = $('#tgdis'); if (d) d.onclick = async () => { busy(d, true); const r = await ctx.api.post('tgdisconnect'); busy(d, false); if (!r.ok) return toast(r.error, 'err'); D.me.telegram = false; toast('Disconnected.'); ctx.render(); };

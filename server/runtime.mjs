@@ -4,7 +4,7 @@
 import { randomUUID, randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { FakeSheet, FakeSpreadsheet, builder, formatDate, b64encode, b64decode } from '../dev/gas-fakes.js';
+import { FakeSheet, FakeSpreadsheet, builder, formatDate, b64encode, b64decode } from '../docs/demo/gas-fakes.js';
 
 const newId = () => randomBytes(24).toString('base64url'); // Drive-like: 32 chars of [A-Za-z0-9_-]
 
@@ -47,14 +47,14 @@ export function createRuntime({ store, filesDir, env, telegram }) {
   let folderObj;
   const fileObj = row => ({
     getId: () => row.id, getName: () => row.name, getDescription: () => row.descr || '',
-    setDescription(d) { row.descr = d; store.setFileDescr(row.id, d); return this; },
+    setDescription(d) { row.descr = d; store.setFileDescr(row.id, d); return this; }, setSharing() { return this; }, // public pictures are served by app.mjs (/files/pub/)
     getBlob: () => blob(readFileSync(join(filesDir, row.id)), row.mime, row.name, row.id),
     getParents: () => { const f = [folderObj(row.folder)]; let i = 0; return { hasNext: () => i < f.length, next: () => f[i++] }; },
   });
   folderObj = id => {
     const row = store.getFolder(id); if (!row) throw new Error('No such folder');
     return {
-      getId: () => id, getUrl: () => '', getName: () => row.name,
+      getId: () => id, getUrl: () => '', getName: () => row.name, setSharing() { return this; },
       createFile(b) {
         const fid = newId(), bytes = b.getBytes();
         writeFileSync(join(filesDir, fid), bytes);
@@ -112,6 +112,7 @@ export function createRuntime({ store, filesDir, env, telegram }) {
       return tgResp({ ok: true, result: {} });
     } },
     DriveApp: {
+      Access: { ANYONE_WITH_LINK: 'ANYONE_WITH_LINK' }, Permission: { VIEW: 'VIEW' },
       createFolder: name => { const id = newId(); store.addFolder(id, name); return folderObj(id); },
       getFolderById: id => folderObj(id),
       getFileById: id => { const r = store.getFile(id); if (!r) throw new Error('No such file'); return fileObj(r); },
@@ -123,7 +124,7 @@ export function createRuntime({ store, filesDir, env, telegram }) {
       deleteTrigger() {}, newTrigger: () => builder(() => null),
       getService: () => ({ getUrl: () => (env.publicUrl() || '') + '/api' }),
     },
-    Session: { getScriptTimeZone: () => env.HUB_TZ || 'Asia/Tashkent', getEffectiveUser: () => ({ getEmail: () => env.OWNER_EMAIL || '' }) },
+    Session: { getScriptTimeZone: () => env.HUB_TZ || 'UTC', getEffectiveUser: () => ({ getEmail: () => env.OWNER_EMAIL || '' }) },
     Logger: { log() {} },
     console: { log() {}, warn: (...a) => console.warn(...a), error: (...a) => console.error(...a) },
   };

@@ -83,6 +83,15 @@ export function createAccounts({ store }) {
       if (a.fails || a.locked_until) store.setAccountFails(a.key, 0, 0);
       return { ok: true, key: a.key };
     },
+    /** A reset link from an admin: new password, same username, the lockout is cleared. */
+    async forceSetPassword(key, password) {
+      const a = store.getAccount(key);
+      if (!a) return 'There is no password to reset — ask your lead for a new link.';
+      const bad = passwordProblem(password, a.username);
+      if (bad) return bad;
+      store.saveAccount(Object.assign({}, a, { hash: await hashPassword(password) }));
+      return '';
+    },
     async setPassword(key, current, password) {
       const a = store.getAccount(key);
       if (!a) return 'You don\'t have a password yet.';

@@ -11,7 +11,8 @@ export const HUB_RE = /^AKfy[\w-]{30,}$/;
 const SERVERS = CFG.hubs || {};
 const isHub = id => HUB_RE.test(id) || Object.prototype.hasOwnProperty.call(SERVERS, id);
 export const params = new URLSearchParams(location.search);
-export const DEMO = params.has('demo');
+/** The demo runs the real Code.gs in the browser with made-up data — only on the shared website (a hub's own server never runs it). */
+export const DEMO = params.has('demo') && !(window.HUB_CONFIG || {}).selfHosted;
 export const DEMO_HUB = 'AKfycbDEMOdemoDEMOdemoDEMOdemoDEMOdemo00000';
 /** Served by your own Haven Hub server (server/): one hub, API on the same address. */
 export const SELF = !!CFG.api && !DEMO;
@@ -145,11 +146,11 @@ export async function ready() { if (DEMO) await demo(); }
 async function demo() {
   if (demoReady) return demoReady;
   demoReady = (async () => {
-    const [fakes, code, data] = await Promise.all([import('../../dev/gas-fakes.js'), fetch('../apps-script/Code.gs').then(r => r.text()), import('../../dev/demo-data.js')]);
+    const [fakes, code, data] = await Promise.all([import('../demo/gas-fakes.js'), fetch('demo/Code.gs', { cache: 'no-cache' }).then(r => { if (!r.ok) throw new Error('demo/Code.gs is missing (npm run sync)'); return r.text(); }), import('../demo/demo-data.js')]);
     const gas = fakes.createGas({ tz: browserTz() }), be = fakes.loadBackend(code, gas);
     const people = params.get('demo') === 'fresh' ? {} : data.seed(be, gas, DEMO_HUB);
     demoSession = people[params.get('as') || 'admin'] || null;
-    window.__hub = { be, gas, people, sheetUrl: gas._ss.getUrl(), tree: data.TREE || [], raw: data.rawFor };
+    window.__hub = { be, gas, people, sheetUrl: gas._ss.getUrl(), tree: data.TREE || [], raw: data.rawFor, as: params.get('as') || 'admin' };
     return be;
   })();
   return demoReady;
@@ -160,3 +161,7 @@ async function demoCall(method, q) {
   return JSON.parse(JSON.stringify(method === 'GET' ? be.get(q) : be.post(q)));
 }
 export const demoSheetUrl = () => (window.__hub && window.__hub.sheetUrl) || '';
+/** The guided tour: look at the hub as someone else (admin, lead, member, viewer, or 'guest' = the public page) without reloading. */
+export function demoAs(who) { if (!DEMO || !window.__hub) return; window.__hub.as = who; demoSession = window.__hub.people[who] || null; }
+/** The Google sign-in client of this hub: the server's (config.js), or the one a Google Sheet hub reports. */
+export const googleClient = P => String(CFG.googleClientId || (P && P.google) || '');

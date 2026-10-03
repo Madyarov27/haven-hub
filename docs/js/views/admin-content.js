@@ -1,13 +1,12 @@
-/* Meetings, team rules and milestones (admins) — small editable tables, saved to their Sheet tabs. */
+/* Meetings, team rules and milestones (admins) — small editable tables, saved to their Sheet tabs. Sponsors have their own page. */
 import { $, $$, esc, icon, toast, busy } from '../ui.js';
 
 const SPEC = {
   Meetings: { title: 'Meetings', hint: 'Shown in everyone\'s Calendar.', cols: [['date', 'Date', 'date'], ['time', 'Time', 'time'], ['where', 'Where', 'text', 'Telegram voice'], ['what', 'What', 'text', 'Roles, launch numbers']] },
   Rules: { title: 'Team rules', hint: 'Shown on the Rules page. Keep them short.', cols: [['title', 'Rule', 'text', 'Reply within 24 hours'], ['text', 'Why / detail', 'text', 'Even if it\'s just "on it".']], order: true },
   Milestones: { title: 'Milestones', hint: 'The big gates and deadlines. “Public” ones appear on your public page; tick “Done” when you hit one.', cols: [['date', 'Date', 'date'], ['label', 'Milestone', 'text', 'Venue confirmed in writing'], ['kind', 'Kind', 'select', ['gate', 'deadline', 'event']], ['public', 'Public', 'check'], ['done', 'Done', 'check']] },
-  Sponsors: { title: 'Sponsors & partners', hint: 'Shown as “Supported by” on your public page. Only add ones confirmed in writing.', cols: [['name', 'Name', 'text', '.xyz'], ['logo_url', 'Logo (https link)', 'text', 'https://…/logo.png'], ['link', 'Website', 'text', 'https://gen.xyz'], ['note', 'Note (not shown)', 'text', 'free domains for participants']] },
 };
-const pick = { Meetings: D => D.meetings, Rules: D => D.rules, Milestones: D => D.milestones, Sponsors: D => D.sponsors };
+const pick = { Meetings: D => D.meetings, Rules: D => D.rules, Milestones: D => D.milestones };
 
 export function content(ctx) {
   ctx.el.innerHTML = Object.keys(SPEC).map(k => `<div class="card flush" data-tab="${k}"><div class="card-h"><div><h3>${SPEC[k].title}</h3><div class="sub">${SPEC[k].hint}</div></div>
@@ -35,7 +34,7 @@ export function content(ctx) {
         const r = await ctx.api.post('list.save', { tab: k, rows });
         busy(sv, false);
         if (!r.ok) return toast(r.error, 'err');
-        const key = { Meetings: 'meetings', Rules: 'rules', Milestones: 'milestones', Sponsors: 'sponsors' }[k];
+        const key = { Meetings: 'meetings', Rules: 'rules', Milestones: 'milestones' }[k];
         ctx.D[key] = r.rows.map(x => k === 'Milestones' ? Object.assign({}, x, { public: x.public === 'yes', done: x.done === 'yes' }) : x);
         rows.length = 0; ctx.D[key].forEach(x => rows.push(Object.assign({}, x))); draw();
         ctx.api.cache(ctx.D); toast(`${SPEC[k].title} saved.`);
