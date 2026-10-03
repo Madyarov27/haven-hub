@@ -2,6 +2,10 @@
 
 A hub keeps working when the website is newer than its backend: new pages appear once the hub's `Code.gs` lists the feature. To update a Google Sheet hub, paste the new `Code.gs` and deploy a **new version** of the same deployment ([setup.md → Updating](setup.md#updating)); on your own server run `hubctl deploy`.
 
+## Unreleased
+
+- **Referral page, part 1.** `apps-script/referrals/Code.gs` — a small separate web app on its own “Referrals” Sheet (`time · name · code`): a visitor opens `?code=…`, types their name, the row is saved and they go on to HQ's signup page. It is not part of the hub backend.
+
 ## 4.5.1 — 2026-10-03
 
 - **Last seen = the last time someone opened the hub.** Every visit stamps a new `last_seen` column in People (at most every 5 minutes); People, Team, the person pages, Scorecards (“Silent” = not on the hub for 5+ days) and the weekly report use it. Before, it was the last thing they *did*.
