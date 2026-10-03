@@ -21,7 +21,7 @@ export function people(ctx) {
   const draw = () => {
     const list = groups[tab].filter(p => !q || (p.name + ' ' + p.role + ' ' + p.area + ' ' + p.email + ' ' + p.handle).toLowerCase().includes(q.toLowerCase()));
     const seen = D.lastSeen || {};
-    $('#ptbl').innerHTML = list.length ? `<div class="tbl-wrap"><table class="tbl stack"><thead><tr><th>Person</th><th>Area</th><th>Access</th><th>Reach</th><th>Tasks</th><th>Last active</th><th class="cb"></th></tr></thead><tbody>${list.map(p => {
+    $('#ptbl').innerHTML = list.length ? `<div class="tbl-wrap"><table class="tbl stack"><thead><tr><th>Person</th><th>Area</th><th>Access</th><th>Reach</th><th>Tasks</th><th>Last seen</th><th class="cb"></th></tr></thead><tbody>${list.map(p => {
       const mine = tasks.filter(t => t.owner === p.key), open = mine.filter(t => !['Done', 'Dropped'].includes(t.status)), over = open.filter(t => dueInfo(t, tz).over);
       return `<tr class="click" data-key="${esc(p.key)}"><td><span class="who-cell">${avatar(p.name)}<span><b>${esc(p.name)}</b><span class="t-sub">${esc(p.role || '—')}</span></span></span></td>
         ${p.active ? `<td data-l="Area"><input class="inl" data-area="${esc(p.key)}" value="${esc(p.area || '')}" list="p-areas" placeholder="—" aria-label="Area of ${esc(p.name)}"></td>
@@ -29,7 +29,7 @@ export function people(ctx) {
         : `<td data-l="Area">${esc(p.area || '—')}</td><td><span class="pill ${esc(p.access)}">${esc(p.access)}</span></td>`}
         <td data-l="Reach" class="nowrap">${p.google ? `<span class="pill ok" title="Signs in with Google${p.google_email ? ': ' + esc(p.google_email) : ''}">G Google</span> ` : ''}${p.password ? `<span class="pill ok" title="Signs in with a username and password">${icon('key')} password</span> ` : ''}${p.telegram ? `<span class="pill ok" title="Telegram connected">${icon('message')} TG</span> ` : ''}${p.email ? `<span class="pill" title="${esc(p.email)}">${icon('mail')} email</span>` : ''}${!p.telegram && !p.email ? '<span class="muted small">no reminders yet</span>' : ''}</td>
         <td data-l="Tasks" class="nowrap">${p.access === 'viewer' ? '—' : `${open.length} open${over.length ? ` · <span class="due over">${over.length} overdue</span>` : ''}`}</td>
-        <td data-l="Last active" class="small muted nowrap">${esc(seen[p.name] ? ago(seen[p.name], tz) : 'never')}</td>
+        <td data-l="Last seen" class="small muted nowrap" title="Last time they opened the hub">${esc(seen[p.name] ? ago(seen[p.name], tz) : 'never')}</td>
         <td class="cb"><div class="rel"><button class="icon-btn" data-menu="${esc(p.key)}" aria-label="Actions for ${esc(p.name)}">${icon('more')}</button></div></td></tr>`;
     }).join('')}</tbody></table></div><datalist id="p-areas">${[...new Set(all.map(x => x.area).filter(Boolean))].sort().map(a => `<option value="${esc(a)}">`).join('')}</datalist>` : `<div style="padding:0 20px 10px">${empty({ title: tab === 'guests' ? 'No guests yet' : tab === 'removed' ? 'Nobody removed' : 'No organizers match', text: tab === 'guests' ? 'Give HQ, a mentor or a sponsor a read-only link to your progress.' : '' })}</div>`;
   };

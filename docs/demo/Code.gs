@@ -1,5 +1,5 @@
 /**
- * Haven Hub — the backend for one Haven's Team Hub.                                             v4.5.0
+ * Haven Hub — the backend for one Haven's Team Hub.                                             v4.5.1
  *
  * A Google Sheet is the database (you can edit it by hand). This script, bound to that Sheet, is:
  *   - the JSON API for the website  https://notazizelse.github.io/haven-hub/?hub=<your deployment id>
@@ -15,7 +15,7 @@
  * The URL stays the same. Secrets never go in this file: personal tokens live in the Sheet, the bot token in Script properties.
  */
 
-const HUB_VERSION = '4.5.0';
+const HUB_VERSION = '4.5.1';
 // On your own server (server/index.mjs) this same file runs on Node; HUB_SERVER is then provided by the server.
 const SELF_HOSTED = typeof HUB_SERVER !== 'undefined' && !!HUB_SERVER;
 const DEFAULT_SITE = 'https://notazizelse.github.io/haven-hub';
@@ -26,7 +26,7 @@ const REPO_RE = /^[\w.-]{1,39}\/[\w.-]{1,100}$/; // a GitHub repo, owner/name
 // Column order = v3 order + new columns at the end, so older sheets upgrade in place. Code reads and writes by header NAME.
 const TABS = {
   Settings: ['key', 'value', 'note'],
-  People: ['key', 'name', 'role', 'area', 'handle', 'token', 'is_lead', 'chat_id', 'active', 'backup', 'works', 'weekend', 'one', 'ask', 'email', 'access', 'notify', 'joined_at', 'photo', 'google_sub', 'google_email'],
+  People: ['key', 'name', 'role', 'area', 'handle', 'token', 'is_lead', 'chat_id', 'active', 'backup', 'works', 'weekend', 'one', 'ask', 'email', 'access', 'notify', 'joined_at', 'photo', 'google_sub', 'google_email', 'last_seen'],
   Tasks: ['id', 'owner', 'title', 'due', 'mins', 'why', 'steps', 'done_when', 'links', 'ask', 'status', 'proof', 'blocked_reason', 'started_at', 'done_at', 'updated_at', 'area', 'review', 'reviewed_by', 'created_by', 'resources'],
   Log: ['time', 'who', 'task', 'action', 'note'],
   Meetings: ['date', 'time', 'where', 'what'],
@@ -343,6 +343,21 @@ function personOut_(p) {
   return { key: p.key, name: p.name, role: p.role, area: p.area, handle: p.handle, email: p.email, access: access_(p), notify: p.notify || 'auto',
     active: p.active !== 'no', telegram: !!p.chat_id, hasLink: !!p.token, password: !!account_(p), google: !!p.google_sub, google_email: p.google_email || '',
     backup: p.backup, works: p.works, weekend: p.weekend, one: p.one, ask: p.ask, joined_at: p.joined_at };
+}
+
+/** Opening the hub (every "me" load) stamps last_seen — at most every 5 minutes, and only that one cell, so it is safe without the lock. */
+function touchSeen_(p) {
+  if (!p || !p._row || (p.last_seen && p.last_seen >= fmt_(new Date(Date.now() - 5 * 60e3)))) return;
+  const c = header_('People').indexOf('last_seen') + 1;
+  if (c < 1) return;
+  try { const now = now_(), rg = sheet_('People').getRange(p._row, c); rg.setNumberFormat('@'); rg.setValue(now); p.last_seen = now; } catch (e) { /* only a timestamp */ }
+}
+/** Name → when they were last on the hub: their last visit, or the last thing they did there (whichever is newer). */
+function seenMap_(logAll) {
+  const seen = {};
+  (logAll || rows_('Log')).forEach(l => { if (l.who && ['system', 'bot'].indexOf(l.who) < 0 && !(seen[l.who] > l.time)) seen[l.who] = l.time; });
+  people_().forEach(p => { if (p.last_seen && !(seen[p.name] > p.last_seen)) seen[p.name] = p.last_seen; });
+  return seen;
 }
 
 // ================================================================== profile photos (small pictures kept in the People tab — never on the public page)
@@ -1519,6 +1534,7 @@ function apiPublic_() {
   });
 }
 function apiMe_(me, q) {
+  touchSeen_(me);
   const S = S_(), lvl = access_(me), seeAll = lvl !== 'member';
   if (q.hub && !S.hub_id && lvl === 'admin' && HUB_RE.test(String(q.hub))) { saveSettingsRaw_({ hub_id: String(q.hub) }); refreshLinks(); }
   const all = rows_('Tasks'), ppl = activePeople_(), lead = isLead_(me);
@@ -1546,9 +1562,8 @@ function apiMe_(me, q) {
   if (seeAll) {
     out.all = all.map(taskOut_);
     if (lvl === 'viewer') out.all.forEach(t => { t.proof = ''; t.blocked_reason = ''; t.ask = ''; t.resources = t.resources.filter(r => !r.private); });
-    const logAll = rows_('Log'), seen = {};
-    logAll.forEach(l => { if (l.who && ['system', 'bot'].indexOf(l.who) < 0) seen[l.who] = l.time; });
-    out.lastSeen = seen;
+    const logAll = rows_('Log');
+    out.lastSeen = seenMap_(logAll);
     out.log = logAll.slice(-80).reverse().map(l => ({ time: l.time, who: l.who, task: l.task, action: l.action, note: lvl === 'viewer' ? '' : l.note }));
     if (lvl !== 'viewer') {
       out.telegram = ppl.map(p => ({ key: p.key, name: p.name, connected: !!p.chat_id }));
@@ -1824,14 +1839,14 @@ function weeklyReport() {
   const tasks = rows_('Tasks').filter(t => t.status !== 'Dropped'), people = activePeople_();
   const open = tasks.filter(t => t.status !== 'Done'), done7 = tasks.filter(t => t.status === 'Done' && t.done_at >= weekAgo);
   const over = open.filter(t => t.due < nowS), next = open.filter(t => t.due >= nowS && t.due <= nextWeek).sort((a, b) => a.due < b.due ? -1 : 1);
-  const seen = {}; rows_('Log').forEach(l => { if (l.who && ['system', 'bot'].indexOf(l.who) < 0) seen[l.who] = l.time; });
+  const seen = seenMap_();
   const silent = team_().filter(p => !isLead_(p) && (!seen[p.name] || seen[p.name] < f(Date.now() - 5 * 864e5))).map(first_);
   const days = Math.max(0, Math.ceil((new Date(S_().event_start + 'T00:00:00Z').getTime() - Date.now()) / 864e5));
   const nm = k => { const p = people.find(x => x.key === k); return p ? first_(p) : k; };
   let full = `📊 Weekly report — ${nowS}\n${days} days to ${event_()}\n\nDone this week: ${done7.length}\nOverdue now: ${over.length}\nDue in the next 7 days: ${next.length}\n`;
   if (over.length) full += '\nOVERDUE:\n' + over.slice(0, 12).map(t => `• ${nm(t.owner)}: ${t.id} ${t.title} (was ${t.due})`).join('\n') + (over.length > 12 ? `\n…and ${over.length - 12} more` : '') + '\n';
   if (next.length) full += '\nNEXT 7 DAYS:\n' + next.slice(0, 15).map(t => `• ${t.due.slice(5, 10)} ${nm(t.owner)}: ${t.title}`).join('\n') + (next.length > 15 ? `\n…and ${next.length - 15} more` : '') + '\n';
-  if (silent.length) full += '\n🔇 No activity for 5+ days: ' + silent.join(', ') + '\n';
+  if (silent.length) full += '\n🔇 Not on the hub for 5+ days: ' + silent.join(', ') + '\n';
   full += '\n' + progressText_();
   notifyLeads_({ text: full, subject: `Weekly report — ${days} days to go`, button: ['Open the dashboard', hubUrl_('admin')] });
   const gm = `📊 Week report — ${days} days to ${event_()}\nDone this week: ${done7.length} · Overdue: ${over.length}\n` + (next.length ? 'Next 7 days:\n' + next.slice(0, 6).map(t => `• ${t.due.slice(5, 10)} ${nm(t.owner)}: ${t.title}`).join('\n') : 'Nothing due next week.');

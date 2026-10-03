@@ -27,7 +27,7 @@ export function personPage(ctx, key) {
         <div class="muted"><b>${esc(p.role || '—')}</b>${p.area ? ' · ' + esc(p.area) : ''}</div>
         ${p.one ? `<p class="ph-one">${esc(p.one)}</p>` : ''}
         <div class="row ph-contact">${tg ? `<a class="btn sm soft" href="${esc(tg)}" target="_blank" rel="noopener">${icon('message')} ${esc(full.handle)}</a>` : ''}${lead && full.email ? `<a class="btn sm ghost" href="mailto:${esc(full.email)}">${icon('mail')} ${esc(full.email)}</a>` : ''}
-          ${lead ? `<span class="small muted">${seen ? 'Active ' + esc(ago(seen, tz)) : 'No activity yet'}${full.joined_at ? ' · joined ' + esc(fmtDay(full.joined_at)) : ''}</span>` : ''}</div>
+          ${lead ? `<span class="small muted">${seen ? 'Last seen ' + esc(ago(seen, tz)) : 'Not seen on the hub yet'}${full.joined_at ? ' · joined ' + esc(fmtDay(full.joined_at)) : ''}</span>` : ''}</div>
         ${lead && reach ? `<div class="row" style="gap:6px;margin-top:8px">${reach}</div>` : ''}</div></div>`;
   if (lead) {
     h += `<div class="kpis">${kpi('open', open.length, { icon: 'list' })}${kpi('overdue', over.length, { tone: over.length ? 'bad' : 'ok', icon: 'alert' })}${kpi('blocked', blocked.length, { tone: blocked.length ? 'bad' : '', icon: 'zap' })}

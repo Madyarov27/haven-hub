@@ -139,7 +139,7 @@ export function team(ctx) {
       <div class="pc-name"><b>${esc(p.name)}</b>${p.key === D.me.key ? ' <span class="pill ip">you</span>' : ''}${p.access === 'admin' || p.access === 'lead' ? ` <span class="pill ${p.access}">${esc(p.access)}</span>` : ''}</div>
       <div class="small muted">${esc(p.role || '—')}${teamBy === 'all' && p.area ? ` · <span class="tag">${esc(p.area)}</span>` : ''}</div>${p.one ? `<p class="small pc-one">${esc(p.one)}</p>` : ''}
       ${lead && mine.length ? `<div class="pc-stats">${bar(100 * done / mine.length, over ? 'warn' : '')}<span class="small"><b>${done}/${mine.length}</b> done${over ? ` · <span class="due over">${over} overdue</span>` : ''}${blk ? ` · <span class="due over">${blk} blocked</span>` : ''}</span></div>` : ''}
-      ${lead ? `<div class="small muted">${seen[p.name] ? 'active ' + esc(ago(seen[p.name], tz)) : 'no activity yet'}</div>` : ''}</a>`;
+      ${lead ? `<div class="small muted">${seen[p.name] ? 'seen ' + esc(ago(seen[p.name], tz)) : 'not seen yet'}</div>` : ''}</a>`;
   };
   let h = `<div class="toolbar"><p class="lede" style="margin:0;flex:1 1 260px">${D.team.length} people on the ${esc(D.event.name)} team. ${lead ? 'Open anyone to see everything about them.' : 'Open anyone to see what they do.'}</p>
     <div class="seg" role="group" aria-label="Show"><button data-by="all" class="${teamBy === 'all' ? 'on' : ''}">Everyone</button><button data-by="area" class="${teamBy === 'area' ? 'on' : ''}">By area</button></div>

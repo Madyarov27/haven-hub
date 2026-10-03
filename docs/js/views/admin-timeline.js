@@ -43,10 +43,10 @@ export function scores(ctx) {
     return { p, mine, md, over, blk, prog, ot, hrs, last, silent, nxt, pct: mine.length ? 100 * md.length / mine.length : 0, score: over.length * 3 + blk.length * 2 + (silent ? 3 : 0) };
   }).sort((a, b) => b.score - a.score || a.pct - b.pct);
   const flagged = cards.filter(c => c.score > 0).length;
-  ctx.el.innerHTML = `<p class="lede">One card per person, needs-attention first. ${flagged ? `<b>${flagged}</b> need a look.` : 'Everyone is on track.'} “Silent” = no activity on the hub for 5+ days.</p><div class="cards">` + cards.map(c => `<div class="card score ${c.score ? 'warn' : ''}">
+  ctx.el.innerHTML = `<p class="lede">One card per person, needs-attention first. ${flagged ? `<b>${flagged}</b> need a look.` : 'Everyone is on track.'} “Silent” = hasn't opened the hub for 5+ days.</p><div class="cards">` + cards.map(c => `<div class="card score ${c.score ? 'warn' : ''}">
     <div class="row between"><div class="who-cell">${avatar(c.p.name)}<div><b>${esc(c.p.name)}</b><div class="small muted">${esc(c.p.role || '')}</div></div></div><div class="sc-big">${c.md.length}<span>/${c.mine.length}</span></div></div>
     <div style="margin:10px 0">${bar(c.pct, c.over.length ? 'warn' : '')}</div>
     <div class="sc-grid"><div><b>${c.ot === null ? '—' : c.ot + '%'}</b><span>on time</span></div><div><b>${c.hrs}</b><span>hours</span></div><div class="${c.over.length ? 'bad' : ''}"><b>${c.over.length}</b><span>overdue</span></div><div class="${c.blk.length ? 'bad' : ''}"><b>${c.blk.length}</b><span>blocked</span></div><div><b>${c.prog.length}</b><span>in progress</span></div></div>
-    <div class="small">${c.silent ? `<span class="due over">${icon('alert')} ${c.last ? 'Silent for ' + Math.floor((Date.now() - parseLocal(c.last, tz)) / DAY) + ' days' : 'No activity yet'}</span>` : 'Active ' + esc(ago(c.last, tz))}</div>
+    <div class="small">${c.silent ? `<span class="due over">${icon('alert')} ${c.last ? 'Not on the hub for ' + Math.floor((Date.now() - parseLocal(c.last, tz)) / DAY) + ' days' : 'Never opened the hub'}</span>` : 'Seen ' + esc(ago(c.last, tz))}</div>
     ${c.nxt ? `<div class="small muted" style="margin-top:4px">Next: <b>${esc(c.nxt.title)}</b> · ${esc(dueInfo(c.nxt, tz).label)}</div>` : ''}</div>`).join('') + `</div>`;
 }

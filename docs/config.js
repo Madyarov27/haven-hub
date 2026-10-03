@@ -11,5 +11,5 @@ window.HUB_CONFIG = {
   // A hub with its own domain serves its own website instead — see release.js → redirects.
   hubs: {},
   // The newest backend (Code.gs) version. Admins running an older one see an "update available" banner.
-  latestBackend: '4.5.0',
+  latestBackend: '4.5.1',
 };

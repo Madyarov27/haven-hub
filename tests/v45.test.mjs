@@ -292,3 +292,19 @@ test('hubctl import-sponsors: a JSON list with logo files next to it; running it
   assert.equal(me.sponsors.length, 2); assert.equal(me.sponsors[0].blurb, 'Badges for everyone who ships'); assert.match(me.sponsors[0].logo, /\/files\/pub\//, 'the logo stays');
   await s.stop();
 });
+
+test('last seen = the last time someone opened the hub (or did something there), stamped at most every 5 minutes', () => {
+  const h = setupHub();
+  const bob = h.add({ name: 'Bob Builder' });
+  assert.equal(h.get(h.admin, { action: 'me' }).lastSeen['Bob Builder'], undefined, 'never opened it');
+  h.get(bob, { action: 'me' });
+  const seen = h.get(h.admin, { action: 'me' }).lastSeen['Bob Builder'];
+  assert.match(seen, /^\d{4}-\d\d-\d\d \d\d:\d\d$/, 'just opening the hub counts — no task needed');
+  const ppl = h.gas._ss.getSheetByName('People'), col = ppl.data[0].indexOf('last_seen'), row = ppl.data.findIndex(r => r[0] === bob.u);
+  ppl.data[row][col] = '2026-01-01 10:00';
+  h.get(bob, { action: 'me' });
+  assert.notEqual(ppl.data[row][col], '2026-01-01 10:00', 'an old stamp is renewed');
+  const stamp = ppl.data[row][col]; ppl.dirty = false;
+  h.get(bob, { action: 'me' });
+  assert.equal(ppl.data[row][col], stamp); assert.equal(ppl.dirty, false, 'within 5 minutes nothing is written');
+});
