@@ -52,4 +52,4 @@ No dependencies for the website or the tests. The server needs Node 22.13+ (it u
 
 ---
 
-Made by the Haven Tashkent organizers for every Haven. Not an official Hack Club HQ product. [MIT licence](LICENSE).
+Made by the Haven Tashkent organizers for every Haven. Not an official Hack Club HQ product. [MIT licence](LICENSE) · [Privacy](docs/privacy.html) · [Terms](docs/terms.html).

@@ -97,7 +97,7 @@ export function landing(root, ctx) {
       ${SELF ? '' : `<form class="card" id="paste"><div class="card-h"><div><h3>Already on a team?</h3><div class="sub">Paste the personal link your lead sent you.</div></div></div>
         <div class="linkbox"><input name="link" placeholder="https://…/?hub=…&u=…&t=…" aria-label="Your personal link"><button class="btn primary" type="submit">Open</button></div><p class="errline small" id="perr" style="margin:6px 0 0"></p></form>`}
     </main>
-    <footer class="pub-foot">Made by the Haven Tashkent organizers for every Haven · not an official Hack Club HQ product · <a href="${esc(repo)}" target="_blank" rel="noopener">open source (MIT)</a> · live example: <a href="https://haventash.xyz" target="_blank" rel="noopener">haventash.xyz</a></footer></div>`;
+    <footer class="pub-foot">Made by the Haven Tashkent organizers for every Haven · not an official Hack Club HQ product · <a href="${esc(repo)}" target="_blank" rel="noopener">open source (MIT)</a> · live example: <a href="https://haventash.xyz" target="_blank" rel="noopener">haventash.xyz</a> · <a href="${here}privacy.html">Privacy</a> · <a href="${here}terms.html">Terms</a></footer></div>`;
   $$('.role-tabs button', root).forEach(b => { b.onclick = () => {
     $$('.role-tabs button', root).forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-selected', String(x === b)); });
     $$('.role-pane', root).forEach(p => { p.hidden = p.dataset.pane !== b.dataset.role; });

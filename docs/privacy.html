@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy — Haven Hub</title>
+<meta name="description" content="What Haven Hub stores, why, where it lives, and how Sign in with Google is used.">
+<link rel="icon" type="image/png" href="assets/favicon-32.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jua&family=Nunito:wght@400;700;800;900&display=swap">
+<link rel="stylesheet" href="css/hub.css?v=4.5.0">
+<style>
+  .doc { max-width: 760px; margin: 0 auto; padding: 32px 20px 64px; }
+  .doc h1 { font-size: 34px; margin: 18px 0 6px; }
+  .doc h2 { font-size: 21px; margin: 28px 0 8px; }
+  .doc p, .doc li { font-size: 16px; line-height: 1.6; }
+  .doc ul { padding-left: 20px; }
+  .doc .meta { color: var(--muted); font-weight: 700; }
+  .doc .box { background: #fff; border: 1px solid var(--line); border-radius: var(--r); padding: 14px 18px; margin: 14px 0; }
+</style>
+</head>
+<body>
+<main class="doc">
+  <a href="./#/about"><img src="assets/logo-orange.png" alt="Hack Club Haven" width="96" height="61"></a>
+  <h1>Privacy</h1>
+  <p class="meta">Haven Hub · last updated 3 October 2026</p>
+
+  <div class="box"><p style="margin:0"><b>In short:</b> a hub keeps only what its organizing team needs to run a Haven game jam. It belongs to the organizers who set it up. Nothing is sold, there are no ads and no tracking, and Sign in with Google is used only to recognise you.</p></div>
+
+  <h2>Who runs a hub</h2>
+  <p>Haven Hub is free, open-source software (<a href="https://github.com/notazizelse/haven-hub">source code</a>) that teams organizing a <a href="https://haven.hackclub.com">Hack Club Haven</a> event use to run their team. It is made by Haven organizers and is <b>not an official Hack Club HQ product</b>.</p>
+  <p>Each hub — for example Haven Tashkent at haventash.xyz — is set up and run by that event's organizers (“the hub admins”). They decide who is on their hub and they hold its data. Questions about the data in a hub go to its organizers; the public page of each hub shows how to reach them.</p>
+
+  <h2>What a hub stores</h2>
+  <ul>
+    <li><b>People on the organizing team:</b> name, role and area, and — if they or an admin add them — an email address, a Telegram username and a small profile photo. Their tasks, what they report (start, done, blocked), the proof they upload (photos, files, links) and a log of activity.</li>
+    <li><b>Reminders:</b> if someone connects the hub's Telegram bot, the hub stores their Telegram chat id so it can send them reminders. Email reminders use the email address saved for them.</li>
+    <li><b>Passwords</b> (hubs on their own server only): a username and a scrypt hash of the password — never the password itself. Sign-in sessions and password-reset links are stored only as hashes.</li>
+    <li><b>The public “Join the team” form:</b> what the person types in — name, a contact (Telegram or email), age group, what they would like to help with and an optional note.</li>
+    <li><b>Sponsors:</b> sponsor names, links and logos, which are shown publicly on the hub's event page.</li>
+  </ul>
+
+  <h2>Sign in with Google</h2>
+  <p>When you press “Sign in with Google” or “Sign up with Google”, Google asks you to share only your basic profile (scopes <code>openid</code>, <code>email</code>, <code>profile</code>). The hub receives your Google account id, your name, your email address (and whether Google has verified it) and your profile picture. The hub never sees your Google password and gets no access to your Gmail, Drive, contacts or anything else in your Google account.</p>
+  <p>This information is used only to:</p>
+  <ul>
+    <li>recognise you when you sign in to the hub you are on, by your Google account id or by the email address an organizer saved for you;</li>
+    <li>fill in your name and email on the join form, so the organizers know the email is really yours;</li>
+    <li>show your Google profile picture next to your name inside the hub, if you have not added your own photo.</li>
+  </ul>
+  <p>It is not shared with anyone outside the hub's organizing team, not sold, and not used for advertising. Haven Hub's use of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
+  <p>You can disconnect Google at any time in the hub (Profile → Sign in with Google → Disconnect) and remove the hub's access in your Google account at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</p>
+
+  <h2>Where the data lives</h2>
+  <ul>
+    <li><b>Hubs on a Google Sheet:</b> in the organizers' own Google Sheet and Google Drive.</li>
+    <li><b>Hubs on their own server</b> (like haventash.xyz): in a database on that server, with nightly backups kept by its organizers.</li>
+    <li><b>The shared website</b> (notazizelse.github.io/haven-hub) is a static site on GitHub Pages. It stores nothing on any server; your browser keeps your sign-in and a copy of your hub's data in its local storage so pages open quickly. Signing out removes them.</li>
+  </ul>
+
+  <h2>Who sees what</h2>
+  <ul>
+    <li>Organizers see their own tasks and the team list. Leads and admins see all tasks and how to reach people. Guest viewers (for example HQ or a mentor) get a read-only view without contacts, proof photos or notes.</li>
+    <li>The public event page shows only what the admins switch on. Team names are off by default, because most organizers are under 18. Profile photos and proof files are never public; only sponsor logos are.</li>
+    <li>Emails and Telegram messages from a hub only go to people on its team.</li>
+  </ul>
+
+  <h2>What we don't do</h2>
+  <p>No ads, no analytics or tracking scripts, no selling or renting of data. The pages load fonts from Google Fonts, so Google can see your IP address when a page opens; nothing else is sent to third parties by the website.</p>
+
+  <h2>Keeping and deleting data</h2>
+  <p>A hub keeps its data while its organizers run it, usually until after their event. To have your data changed or deleted, ask the hub's organizers: they can remove you from the team, reset or delete your sign-in, and delete rows from their Sheet or server. Organizers can export or delete everything at any time.</p>
+
+  <h2>Young people</h2>
+  <p>Haven is for ages 13–18, and most organizing teams are teenagers. Haven Hub is built to collect as little as possible about them. Parents or guardians with a question about a hub can contact that event's organizers, or Hack Club at <a href="https://hackclub.com">hackclub.com</a>.</p>
+
+  <h2>Changes and contact</h2>
+  <p>If this page changes, the date at the top changes too. Questions about the software: open an issue on <a href="https://github.com/notazizelse/haven-hub/issues">GitHub</a>. Questions about a specific hub's data: its organizers.</p>
+  <p class="meta"><a href="terms.html">Terms</a> · <a href="./#/about">Haven Hub</a></p>
+</main>
+</body>
+</html>

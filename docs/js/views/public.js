@@ -74,7 +74,7 @@ export async function publicPage(root, ctx, opts = {}) {
       <div class="countdown" id="cd" aria-live="off"></div>
       <div class="row">${cta}</div></div></header>
     <main class="pub-main">${main}</main>
-    <footer class="pub-foot">${esc(ev.name)} is part of <a href="https://haven.hackclub.com" target="_blank" rel="noopener">Hack Club Haven</a> · organized with <a href="${esc(shared)}/#/about" target="_blank" rel="noopener">Haven Hub</a> — <a href="${esc(shared)}/#/about" target="_blank" rel="noopener">run it for your Haven →</a></footer></div>`;
+    <footer class="pub-foot">${esc(ev.name)} is part of <a href="https://haven.hackclub.com" target="_blank" rel="noopener">Hack Club Haven</a> · organized with <a href="${esc(shared)}/#/about" target="_blank" rel="noopener">Haven Hub</a> — <a href="${esc(shared)}/#/about" target="_blank" rel="noopener">run it for your Haven →</a> · <a href="privacy.html">Privacy</a></footer></div>`;
   const start = parseLocal(ev.start + ' 09:00', tz), end = parseLocal((ev.end || ev.start) + ' 23:59', tz);
   const tick = () => {
     const el = $('#cd'); if (!el) return clearInterval(timer);
