@@ -4,7 +4,7 @@ A hub keeps working when the website is newer than its backend: new pages appear
 
 ## Unreleased
 
-- **Referral page, part 1.** `apps-script/referrals/Code.gs` — a small separate web app on its own “Referrals” Sheet (`time · name · code`): a visitor opens `?code=…`, types their name, the row is saved and they go on to HQ's signup page. It is not part of the hub backend.
+- **Referral page, part 1.** `apps-script/referrals/Code.gs` — a small separate web app on its own “Referrals” Sheet (`time · name · code`): a visitor opens `?code=…`, types their name, the row is saved and they go on to HQ's signup page with `?ref=<code>`, so HQ counts the referral. Set `SIGNUP_URL` and `EVENT_NAME` at the top for your city. It is not part of the hub backend.
 
 ## 4.5.1 — 2026-10-03
 
