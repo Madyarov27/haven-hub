@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Haven Tashkent</title>
+<style>
+  :root { --bg: #fff7ee; --card: #ffffff; --text: #2b1d12; --muted: #7a6a5c; --accent: #e8590c; --line: #ecdccb; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1c1511; --card: #2a201a; --text: #f6ebe0; --muted: #b7a595; --accent: #ff8a3d; --line: #44352a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 420px; margin: 0 auto; padding: 24px 16px 40px; }
+  .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+  .langs button { background: none; border: 0; padding: 6px 8px; color: var(--muted); font: inherit; font-size: 14px; cursor: pointer; }
+  .langs button[aria-pressed="true"] { color: var(--accent); font-weight: 700; }
+  h1 { font-size: 28px; line-height: 1.2; margin: 0 0 4px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; margin-top: 20px; }
+  label { display: block; font-weight: 600; margin-bottom: 6px; }
+  input[type="text"] { width: 100%; padding: 13px; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; }
+  input[type="text"]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .age { display: flex; gap: 10px; align-items: center; font-weight: 400; margin: 14px 0 0; }
+  .age input { width: 20px; height: 20px; accent-color: var(--accent); }
+  button.go { width: 100%; margin-top: 16px; padding: 14px; font: inherit; font-weight: 700; color: #fff; background: var(--accent); border: 0; border-radius: 10px; cursor: pointer; }
+  button.go:disabled { opacity: .6; }
+  .hint { color: var(--accent); font-size: 14px; min-height: 20px; margin: 8px 0 0; }
+  .small { color: var(--muted); font-size: 13px; margin: 14px 0 0; }
+  .skip { display: block; text-align: center; margin-top: 18px; color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="top">
+    <strong>Hack Club Haven</strong>
+    <div class="langs">
+      <button type="button" data-lang="uz">UZ</button>
+      <button type="button" data-lang="ru">RU</button>
+      <button type="button" data-lang="en">EN</button>
+    </div>
+  </div>
+  <h1>Haven Tashkent</h1>
+  <p id="lede"></p>
+  <form class="card" id="form">
+    <label for="name" id="nameLabel"></label>
+    <input type="text" id="name" required minlength="2" maxlength="100" autocomplete="name">
+    <label class="age"><input type="checkbox" id="age"> <span id="ageLabel"></span></label>
+    <p class="hint" id="hint"></p>
+    <button class="go" id="go"></button>
+    <p class="small" id="privacy"></p>
+  </form>
+  <a class="skip" id="skip"></a>
+</main>
+<script>
+  // The Apps Script web app that saves {time, name, code}: Deploy > Manage deployments > Web app URL (ends in /exec).
+  const WEB_APP_URL = '';
+  const SIGNUP_URL = 'https://haven.hackclub.com/tashkent'; // HQ's signup page
+
+  const TEXT = {
+    uz: {
+      lede: "Ismingizni yozing va rasmiy ro'yxatdan o'tish sahifasiga o'ting.",
+      name: 'Ismingiz', age: 'Men 13–18 yoshdaman', go: 'Davom etish', saving: 'Saqlanmoqda…',
+      ageNo: 'Haven 13–18 yoshdagilar uchun.',
+      privacy: "Biz faqat ismingizni saqlaymiz — Haven Tashkent uchun takliflarni sanash va tadbirda sizni topish uchun. Uni 2026-yil 31-dekabrgacha o'chiramiz.",
+      skip: "O'tkazib yuborish — to'g'ridan-to'g'ri rasmiy ro'yxatdan o'tish",
+    },
+    ru: {
+      lede: 'Напишите своё имя и перейдите на официальную страницу регистрации.',
+      name: 'Ваше имя', age: 'Мне 13–18 лет', go: 'Продолжить', saving: 'Сохраняем…',
+      ageNo: 'Haven — для тех, кому 13–18.',
+      privacy: 'Мы сохраняем только ваше имя, чтобы считать приглашения на Haven Tashkent и найти вас на входе. Мы удалим его до 31 декабря 2026 года.',
+      skip: 'Пропустить — сразу к официальной регистрации',
+    },
+    en: {
+      lede: "Write your name, then continue to the official registration page.",
+      name: 'Your name', age: "I'm 13–18", go: 'Continue', saving: 'Saving…',
+      ageNo: 'Haven is for ages 13–18.',
+      privacy: 'We save only your name, to count invitations for Haven Tashkent and find you at check-in. We delete it by 31 December 2026.',
+      skip: 'Skip — go straight to the official registration',
+    },
+  };
+
+  const $ = id => document.getElementById(id);
+  const params = new URLSearchParams(location.search);
+  // ?r=CODE from the link. Capitals, digits, _ and - only; anything else is dropped.
+  const code = (params.get('r') || '').replace(/[^A-Za-z0-9_-]/g, '').replace(/^-+/, '').slice(0, 32).toUpperCase();
+  const signupUrl = code ? SIGNUP_URL + '?ref=' + encodeURIComponent(code) : SIGNUP_URL;
+
+  let lang = 'uz';
+  try { lang = localStorage.getItem('lang') || lang; } catch (e) {}
+  if (!TEXT[lang]) lang = 'uz';
+
+  function render() {
+    const t = TEXT[lang];
+    document.documentElement.lang = lang;
+    $('lede').textContent = t.lede;
+    $('nameLabel').textContent = t.name;
+    $('ageLabel').textContent = t.age;
+    $('go').textContent = t.go;
+    $('privacy').textContent = t.privacy;
+    $('skip').textContent = t.skip;
+    $('hint').textContent = '';
+    document.querySelectorAll('[data-lang]').forEach(b => b.setAttribute('aria-pressed', b.dataset.lang === lang));
+  }
+
+  document.querySelectorAll('[data-lang]').forEach(b => {
+    b.onclick = () => {
+      lang = b.dataset.lang;
+      try { localStorage.setItem('lang', lang); } catch (e) {}
+      render();
+    };
+  });
+
+  $('skip').href = signupUrl;
+
+  $('form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const t = TEXT[lang];
+    const name = $('name').value.trim();
+    if (name.length < 2) return;
+    if (!$('age').checked) { $('hint').textContent = t.ageNo; return; }
+    $('go').disabled = true;
+    $('go').textContent = t.saving;
+    // Saving must never stop someone from registering: on any error or after 5 seconds, go on anyway.
+    if (WEB_APP_URL) {
+      const save = fetch(WEB_APP_URL, { method: 'POST', mode: 'no-cors', keepalive: true, body: new URLSearchParams({ name, code }) });
+      await Promise.race([save.catch(() => {}), new Promise(done => setTimeout(done, 5000))]);
+    }
+    location.href = signupUrl;
+  });
+
+  render();
+</script>
+</body>
+</html>
