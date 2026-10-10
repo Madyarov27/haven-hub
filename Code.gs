@@ -9,9 +9,9 @@
 const SIGNUP_URL = 'https://haven.hackclub.com/tashkent'; // HQ's signup page for your city
 const EVENT_NAME = 'Haven Tashkent';
 const HEADERS = ['time', 'name', 'code'];
-// Ambassadors' codes, in capitals, e.g. ['DILNURA', 'AZIZ']. A code that is not listed is saved as blank.
-// Empty list = every code is saved as it came.
-const CODES = [];
+// Ambassadors' codes live in a tab called "Codes": code · owner name · school, header in row 1.
+// A code that is not in column A is saved as blank. No Codes tab (or an empty one) = every code is saved as it came.
+const CODES_TAB = 'Codes';
 
 // Functions ending in _ cannot be called by visitors through google.script.run.
 
@@ -43,7 +43,8 @@ function doPost(e) {
 function save(name, code) {
   name = clean_(name);
   code = cleanCode_(code);
-  if (CODES.length && CODES.indexOf(code) < 0) code = ''; // unknown code: still works, saved as blank
+  const codes = knownCodes_();
+  if (codes.length && codes.indexOf(code) < 0) code = ''; // unknown code: still works, saved as blank
   if (!name) return { ok: false, error: 'name is required' };
   sheet_().appendRow([new Date(), name, code]);
   return { ok: true, url: code ? SIGNUP_URL + '?ref=' + encodeURIComponent(code) : SIGNUP_URL };
@@ -58,8 +59,15 @@ function deleteTestRows() {
   }
 }
 
+// Signups go to the first tab, so keep that tab first and the Codes tab after it.
 function sheet_() {
   return SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
+}
+
+function knownCodes_() {
+  const tab = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CODES_TAB);
+  if (!tab || tab.getLastRow() < 2) return [];
+  return tab.getRange(2, 1, tab.getLastRow() - 1, 1).getValues().map(row => cleanCode_(row[0])).filter(String);
 }
 
 // Trim, cap length, and stop the sheet from treating input as a formula.
